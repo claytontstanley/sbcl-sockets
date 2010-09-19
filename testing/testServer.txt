@@ -1,0 +1,5 @@
+file2load= unitTestFramework.lisp
+file2load= server.lisp
+file2load= testServer.lisp
+file2load= unitTestFramework.lisp
+albumBuilder= #'test-server

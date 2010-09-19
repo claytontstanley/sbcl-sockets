@@ -1,6 +1,6 @@
 (load "uni-files.lisp")
 
-;finite state machine that executes functions at the specified time, when active
+;DEVS that executes functions at the specified time, when active
 ;you can pass functions to execute at each iteration (at quot)
 ;and after each time the quota is reached (at quota)
 (defmacro define-manager (name quota atQuota &optional (atQuot))
@@ -10,11 +10,11 @@
 	 (active t))
      (plambda () (name quot quota active)
        (if active
-	   ,(if atQuot `(funcall ,atQuot)))
+	   (aif ,atQuot (funcall it)))
        (incf quot)
        (when (eq quot quota)
 	 (if active
-	     ,(if atQuota `(funcall ,atQuota)))
+	     (aif ,atQuota (funcall it)))
 	 (setf quot 0)))))
 
 ;container to store a collection of managers (in a hash table)
@@ -30,17 +30,12 @@
 (define-managers update-display) ;container that holds all functions that update the display (that is, the lisp->os x bridge)
 (define-managers update-data) ;container that holds all functions that update the data (that is, the DAQ->lisp bridge)
 
-;print all the managers in the pandoric function 'from'
 (defmacro print-managers (from)
+  "print all the managers in the pandoric function 'from'"
   `(with-pandoric (managers) #',from
      (loop for manager being the hash-values of managers
 	do (with-pandoric (name active quot quota) manager
 	     (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" ',from name active quot quota)))))
-
-(defmacro! manager-present-p (o!name in)
-"if manager o!name is present in pandoric 'in'"
-  `(with-pandoric (managers) #',in
-     (key-present ,g!name managers)))
 
 (defmacro! add-manager (o!manager to)
   "adds manager o!manager to pandoric 'to'; errors if already present"
@@ -55,6 +50,11 @@
      (assert (manager-present-p ,g!name ,from) nil "tried to remove manager ~a that is not present~%" ,g!name)
      (with-pandoric (managers) #',from
        (remhash ,g!name managers))))
+
+(defmacro! manager-present-p (o!name in)
+  "if manager o!name is present in pandoric 'in'"
+  `(with-pandoric (managers) #',in
+     (key-present ,g!name managers)))
 
 (defmacro! activate-manager (o!name from)
   "activates manager o!name from pandoric 'from'; errors if not present, or present and already active"
@@ -164,6 +164,12 @@
 
 (defmacro display-active-p (name)
   `(manager-active-p ,name update-display))
+
+(defmacro data-present-p (name)
+  `(manager-present-p ,name update-data))
+
+(defmacro display-present-p (name)
+  `(manager-present-p ,name update-display))
 
 (defmacro print-all ()
   `(progn
