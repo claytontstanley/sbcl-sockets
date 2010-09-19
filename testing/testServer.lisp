@@ -69,11 +69,61 @@
     (test-single ("name1") ("output"))
     (test-single () ())))
 
+(deftest test-add-manager ()
+  (macrolet ((check-added (names strings)
+	       `(progn
+		  (get-managers ,names ,strings)
+		  ,@(mapcar (lambda (name) `(check (manager-present-p ,name the-managers))) names)))
+	     (check-for-error (names strings should-error)
+	       `(check
+		 (equal ,should-error
+			(handler-case
+			    (progn 
+			      (get-managers ,names ,strings)
+			      nil)
+			  (error (condition) (declare (ignore condition)) t))))))
+    (check-added ("name") ("output"))
+    (check-added () ())
+    (check-added ("name2" "name") ("output2" "output"))
+    (check-for-error ("name" "name") ("output" "output2") t)
+    (check-for-error ("name" "name2") ("output" "output") nil)
+    (check-for-error ("name" "name2") ("output" "output2") nil)))
+
+(deftest test-remove-manager ()
+  (macrolet ((check-removed (remove names)
+	       `(progn
+		  (get-managers ,names ,names)
+		  (remove-manager ,remove the-managers)
+		  (check (not (manager-present-p ,remove the-managers)))))
+	     (check-for-error (remove names should-error)
+	       `(progn
+		  (get-managers ,names ,names)
+		  (check
+		   (equal ,should-error
+			  (handler-case
+			      (progn
+				(remove-manager ,remove the-managers)
+				nil)
+			    (error (condition) (declare (ignore condition)) t)))))))
+    (check-removed "name" ("name" "name2"))
+    (check-removed "name2" ("name2"))
+    (check-for-error "name" () t)
+    (check-for-error "name2" ("name") t)
+    (check-for-error "name3" ("name1" "name3") nil)))
+
+
+
+
+
+	     
+
 (defun test-server ()
   (let ((result
 	 (runtests 
 	  (test-define-manager)
 	  (test-define-managers)
 	  (test-print-managers)
+	  (test-add-manager)
+	  (test-remove-manager)
 	  )))
     (format t "~%overall: ~:[FAIL~;pass~]~%" result)))
