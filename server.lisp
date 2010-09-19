@@ -98,6 +98,7 @@
       (N 100)) 
   (setf (symbol-function 'update-DAQ)
 	(plambda () (strm! sock! data N)
+	  (trim-data data N)
 	  ;update all of the raw data
 	  (push (random 5) (gethash "RPM-Raw" data)))))
 
@@ -113,10 +114,12 @@
       (N 100)) 
   (setf (symbol-function 'update-OSX)
 	(plambda () (strm! sock! data N)
-	  ;update all of the raw data
-	  ;for these, if there's anything new on the strm, we just eval it
-	  (while (and sock! (sb-bsd-sockets::socket-open-p sock!) (listen strm!))
-	    (let ((line (uni-socket-read-line strm!)))
+	  (trim-data data N)
+	  (let ((line))
+	    ;update all of the raw data
+	    ;for these, if there's anything new on the strm, we just eval it
+	    (while (and sock! (sb-bsd-sockets::socket-open-p sock!) (listen strm!))
+	      (setf line (uni-socket-read-line strm!))
 	      (if (string-equal line "[[QUIT]]")
 		  (progn
 		    (sb-bsd-sockets::close strm!)
@@ -216,8 +219,6 @@
   ;for kicks, lets do a linear transformation on one of the channels in the DAQ
   (add-data-transform "RPM" 4 "RPM-Raw" (+ x (* x 100) 5))
   (add-data-transform "RPM-Special" 2 "RPM" (* x (* x (* x 100))))
-  ;last thing we should do is trim all of the data
-  (add-data "trim" 1 (lambda () (with-pandoric (data N) #'update-DAQ (trim-data data N))))
 
   ;first all raw OSX incomings will be updated; these just get evaled
   (add-display "update-OSX" 1 #'update-OSX)
@@ -225,7 +226,6 @@
   (add-display-from-data "RPM" 1)
   (add-display-from-data "RPM-Raw" 2)
   (add-display-from-data "RPM-Special" 1)
-  (add-display "trim" 1 (lambda () (with-pandoric (data N) #'update-OSX (trim-data data N))))
 
   (print-all) ;print the data and display managers that will be called each time 'update-call' is called
 
