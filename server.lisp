@@ -88,6 +88,19 @@
       do (if (> (length ,g!channel) ,N)
 	     (setf ,g!channel (nbutlast ,g!channel)))))
 
+;newly-discovered anaphoric cond; works just like cond, but stores the 
+;value of each condition as 'it', which is accessable in the code
+;following the condition
+(defmacro! acond (&rest clauses)
+    (if clauses
+	(let ((cl1 (car clauses)))
+	  `(let ((,g!sym ,(car cl1)))
+	     (if ,g!sym
+		 (let ((it ,g!sym)) 
+		   (declare (ignorable it)) 
+		   ,@(cdr cl1))
+		 (acond ,@(cdr clauses)))))))
+
 ;defines a stream that is a pandoric function
 ;the function has an inner loop that processes all lines currently on strm!
 ;if a line is "[QUIT]", it will close the stream
@@ -109,14 +122,13 @@
 	       (while (handler-case (listen strm!) 
 			(error (condition) (declare (ignore condition)) nil))
 		 (setf line (uni-socket-read-line strm!))
-		 (cond ((string-equal line "[QUIT]")
-			(if strm! (sb-bsd-sockets::close strm!))
-			(if sock! (sb-bsd-sockets::socket-close sock!)))
-		       ((line2element line)
-			(let ((it (line2element line)))
-			  (push (eval (read-from-string (cdr it))) (gethash (car it) data))))
-		       (t
-			(eval (read-from-string line))))))))))
+		 (acond ((string-equal line "[QUIT]")
+			 (if strm! (sb-bsd-sockets::close strm!))
+			 (if sock! (sb-bsd-sockets::socket-close sock!)))
+			((line2element line)
+			 (push (eval (read-from-string (cdr it))) (gethash (car it) data)))
+			(t
+			 (eval (read-from-string line))))))))))
 
 ;update-OSX is responsible for storing all of the raw data from the OSX stream
 (define-stream update-OSX)
@@ -273,7 +285,7 @@
   ;chain on any other functions to further process the raw data
   ;for kicks, lets do a linear transformation on one of the channels in the DAQ
   (add-data-transform "RPM" 4 "RPM-Raw" (+ x (* x 100) 5))
-  ;this pattern can take care of calibration signals send from OSX 
+  ;this pattern can take care of calibration signals sent from OSX 
   (add-data-transform "RPM-Special" 2 "RPM-Raw" (* x (aif (get-display-datum "RPM-xfer-m") it 1)))
 
 
