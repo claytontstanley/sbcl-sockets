@@ -4,27 +4,28 @@
 ;when active, you can pass functions to execute at each iteration (at quot)
 ;and after each time the quota is reached (at quota)
 ;the functioned returned is pandoric, so you can access/change state variables
-(defmacro define-manager (name quota atQuota &optional (atQuot))
-  `(let ((quota ,quota)
-	 (quot 0)
-	 (name ,name)
-	 (active t))
-     (plambda () (name quot quota active)
-       (if active
-	   (aif ,atQuot (funcall it)))
-       (incf quot)
-       (when (eq quot quota)
-	 (if active
-	     (aif ,atQuota (funcall it)))
-	 (setf quot 0)))))
-
+(defmacro define-manager (&key (name) (quota) (QuotaFn) (QuotFn))
+    `(let ((quota ,quota)
+	   (quot 0)
+	   (name ,name)
+	   (active t))
+       (plambda () (name quot quota active)
+	 ,(if QuotFn
+	      `(if active (funcall ,QuotFn)))
+	 (incf quot)
+	 (when (eq quot quota)
+	   ,(if QuotaFn
+		`(if active (funcall ,QuotaFn)))
+	   (setf quot 0)))))
+  
 ;container to store a collection of managers (in a hash table)
 ;returns a pandoric function that will loop through all the managers and 
 ;execute the functions that have been latched to each manager
 (defmacro define-managers (name)
-  `(let ((managers (make-hash-table :test #'equalp)))
+  `(let ((managers (make-hash-table :test #'equalp))
+	 (socket))
      (setf (symbol-function ',name)
-	   (plambda () (managers)
+	   (plambda () (managers socket)
 	     (loop for manager being the hash-values of managers
 		do (funcall manager))))))
 
@@ -133,35 +134,47 @@
 ;update-OSX is responsible for storing all of the raw data from the OSX stream
 (define-stream update-OSX)
 
+(with-pandoric (socket) #'update-display
+  (setf socket #'update-OSX))
+
 ;update-DAQ is responsible for storing all of the raw data from the DAQ,
 ;as well as storing all of the transformed data derived from the raw data
 (define-stream update-DAQ)
 
+(with-pandoric (socket) #'update-data
+  (setf socket #'update-DAQ))
+
 (defmacro get-datum (stream channelName)
   "gets most recent datapoint in channel 'channel' in data hash table for the stream 'stream'"
-  `(with-pandoric (data) #',stream
-     (car (gethash ,channelName data))))
+  `(car (gethash ,channelName (get-pandoric ,stream 'data))))
+
 
 (defmacro get-channel (stream channelName)
   "gets channel 'channel' in data hash table for the stream 'stram'"
-  `(gethash ,channelName (get-pandoric #',stream 'data)))
+  `(gethash ,channelName (get-pandoric ,stream 'data)))
 
-(defmacro! add-to-from-that (to from o!name quota)
-  "attaches a channel from 'from' data to 'to' stream"
-  `(add-display ,g!name ,quota
-		(lambda ()
-		  (with-pandoric (strm!) #',to
-		    (aif (get-datum ,from ,g!name)
-			 (uni-send-string strm! (format nil "~a=~a~%" ,g!name it)))))))
+(defmacro! add-to-from-that (managers toChannel fromChannel o!name quota)
+  "attaches a channel from 'from' to 'to' stream"
+  `(add-manager
+    (define-manager :name ,g!name :quota ,quota
+		    :quotaFn
+		    (lambda ()
+		      (with-pandoric (strm!) #',toChannel
+			(aif (get-datum #',fromChannel ,g!name)
+			     (uni-send-string strm! (format nil "~a=~a~%" ,g!name it))))))
+    ,managers))
 
-(defmacro! add-transform (origin o!to quota o!from xfer-fn)
+(defmacro! add-transform (managers o!name quota o!from xfer-fn)
   "adds a channel to data who's value is a function of another channel; xfer-fn defines the transfer function (f(x); x is from, f(x) is to)"
-  `(add-data ,g!to ,quota
-	     (lambda ()
-               ;anaphor b/c we're injecting a xfer-fn that has an 'x' defined
-	       (let ((x (get-datum ,origin ,g!from))) 
-		 (if x
-		     (push ,xfer-fn (get-channel ,origin ,g!to)))))))
+  `(add-manager
+    (define-manager :name ,g!name :quota ,quota
+		    :quotaFn  
+		    (lambda ()
+		      ;anaphor b/c we're injecting a xfer-fn that has an 'x' defined
+		      (let ((x (get-datum (get-pandoric #',managers 'socket) ,g!from))) 
+			(if x
+			    (push ,xfer-fn (get-channel (get-pandoric #',managers 'socket) ,g!name))))))
+    ,managers))
               
 ;;;you should only need to access functions/macros below to do stuff
 (defmacro add-display (&rest rest)
@@ -224,29 +237,29 @@
   "returns t/f data manager 'name' is present"
   `(manager-present-p ,name update-data))
 
-(defmacro add-display-from-data (name quota)
+(defmacro add-display-from-data (&key (name) (quota))
   "attaches a data channel to the display stream"
-  `(add-to-from-that update-OSX update-DAQ ,name ,quota))
+  `(add-to-from-that update-display update-OSX update-DAQ ,name ,quota))
 
-(defmacro add-data-from-display (name quota)
+(defmacro add-data-from-display (&key (name) (quota))
   "attaches a display channel to the data stream"
-  `(add-to-from-that update-DAQ update-OSX ,name ,quota))
+  `(add-to-from-that update-data update-DAQ update-OSX ,name ,quota))
 
-(defmacro add-display-transform (to quota from xfer-fn)
+(defmacro add-display-transform (&key (name) (quota) (from) (xferfn))
   "transforms a display channel"
-  `(add-transform update-OSX ,to ,quota ,from ,xfer-fn))
+  `(add-transform update-display ,name ,quota ,from ,xferFn))
 
-(defmacro add-data-transform (to quota from xfer-fn)
+(defmacro add-data-transform (&key (name) (quota) (from) (xferFn))
   "transforms a data channel"
-  `(add-transform update-DAQ ,to ,quota ,from ,xfer-fn))
+  `(add-transform update-data ,name ,quota ,from ,xferFn))
 
 (defmacro get-display-datum (channel)
   "gets most recent datapoint in channel 'channel' in data hash table for the display (OSX) stream"
-  `(get-datum update-OSX ,channel))
+  `(get-datum #'update-OSX ,channel))
 
 (defmacro get-data-datum (channel)
   "gets most recent datapoint in channel 'channel' in data hash table for the data (DAQ) stream"
-  `(get-datum update-DAQ ,channel))
+  `(get-datum #'update-DAQ ,channel))
 
 (defmacro print-all ()
   "prints all managers currently present"
@@ -276,17 +289,17 @@
 	     ))))
   ;initialize the OSX-strm
   (with-pandoric (strm! sock!) #'update-OSX
-    (multiple-value-setq (strm! sock!) (uni-prepare-socket "127.0.0.1" 9557)))
+    (multiple-value-setq (strm! sock!) (uni-prepare-socket "127.0.0.1" 9558)))
     
   ;;;define the events for the data manager
   
   ;first the DAQ incomings wil be updated
-  (add-data "update-DAQ" 1 #'update-DAQ)
+  (add-data :name "update-DAQ" :quota 1 :quotaFn #'update-DAQ)
   ;chain on any other functions to further process the raw data
   ;for kicks, lets do a linear transformation on one of the channels in the DAQ
-  (add-data-transform "RPM" 4 "RPM-Raw" (+ x (* x 100) 5))
+  (add-data-transform :name "RPM" :quota 4 :from "RPM-Raw" :xferFn (+ x (* x 100) 5))
   ;this pattern can take care of calibration signals sent from OSX 
-  (add-data-transform "RPM-Special" 2 "RPM-Raw" (* x (aif (get-display-datum "RPM-xfer-m") it 1)))
+  (add-data-transform :name "RPM-Special" :quota 2 :from "RPM-Raw" :xferFn (* x (aif (get-display-datum "RPM-xfer-m") it 1)))
 
 
 
@@ -297,14 +310,14 @@
   ;;;define the events for the display manager
 
   ;first the OSX incomings will be updated
-  (add-display "update-OSX" 1 #'update-OSX)
+  (add-display :name "update-OSX" :quota 1 :quotaFn #'update-OSX)
   ;chain on any other functions to further process the raw data
   ;add-display-transform...
 
   ;then initialize any OSX outgoings
-  (add-display-from-data "RPM" 1)
-  (add-display-from-data "RPM-Raw" 2)
-  (add-display-from-data "RPM-Special" 1)
+  (add-display-from-data :name "RPM" :quota 1)
+  (add-display-from-data :name "RPM-Raw" :quota 2)
+  (add-display-from-data :name "RPM-Special" :quota 1)
 
   
   (print-all) ;print the data and display managers that will be called each time 'update-call' is called

@@ -7,7 +7,7 @@
 (defvar cnt 0)
 
 (defun run-client ()
-  (multiple-value-setq (strm sock) (uni-make-socket "127.0.0.1" 9557))
+  (multiple-value-setq (strm sock) (uni-make-socket "127.0.0.1" 9558))
   (while (and sock (sb-bsd-sockets::socket-open-p sock))
     (format t "socket open~%")
     (while (and sock (sb-bsd-sockets::socket-open-p sock) (listen strm))
