@@ -1,94 +1,5 @@
 (load "uni-files.lisp")
 
-;DEVS (discreet event simulator) that executes functions at the specified time, 
-;when active, you can pass functions to execute at each iteration (at quot)
-;and after each time the quota is reached (at quota)
-;the functioned returned is pandoric, so you can access/change state variables
-(defmacro define-manager (&key (name) (quota) (QuotaFn) (QuotFn))
-    `(let ((quota ,quota)
-	   (quot 0)
-	   (name ,name)
-	   (active t))
-       (plambda () (name quot quota active)
-	 ,(if QuotFn
-	      `(if active (funcall ,QuotFn)))
-	 (incf quot)
-	 (when (eq quot quota)
-	   ,(if QuotaFn
-		`(if active (funcall ,QuotaFn)))
-	   (setf quot 0)))))
-  
-;container to store a collection of managers (in a hash table)
-;returns a pandoric function that will loop through all the managers and 
-;execute the functions that have been latched to each manager
-(defmacro define-managers (name)
-  `(let ((managers (make-hash-table :test #'equalp))
-	 (socket))
-     (setf (symbol-function ',name)
-	   (plambda () (managers socket)
-	     (loop for manager being the hash-values of managers
-		do (funcall manager))))))
-
-(define-managers update-display) ;container that holds all functions that update the display (that is, the lisp->os x bridge)
-(define-managers update-data) ;container that holds all functions that update the data (that is, the DAQ->lisp bridge)
-
-(defmacro print-managers (from)
-  "print all the managers in the pandoric function 'from'"
-  `(with-pandoric (managers) #',from
-     (loop for manager being the hash-values of managers
-	do (with-pandoric (name active quot quota) manager
-	     (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" ',from name active quot quota)))))
-
-(defmacro! add-manager (o!manager to)
-  "adds manager o!manager to pandoric 'to'; errors if already present"
-  `(let ((,g!name (get-pandoric ,g!manager 'name)))
-     (assert (not (manager-present-p ,g!name ,to)) nil "tried to add manager ~a that is already present~%" ,g!name)
-     (with-pandoric (managers) #',to
-       (setf (gethash ,g!name managers) ,g!manager))))
-		     
-(defmacro! remove-manager (o!name from)
-  "removes manager o!name from pandoric 'from'; errors if not already present"
-  `(progn
-     (assert (manager-present-p ,g!name ,from) nil "tried to remove manager ~a that is not present~%" ,g!name)
-     (with-pandoric (managers) #',from
-       (remhash ,g!name managers))))
-
-(defmacro! manager-present-p (o!name in)
-  "if manager o!name is present in pandoric 'in'"
-  `(with-pandoric (managers) #',in
-     (key-present ,g!name managers)))
-
-(defmacro! activate-manager (o!name from)
-  "activates manager o!name from pandoric 'from'; errors if not present, or present and already active"
-  `(progn
-     (assert (manager-present-p ,g!name ,from) nil "tried to activate manager ~a that is not present" ,g!name)
-     (with-pandoric (managers) #',from
-       (with-pandoric (active) (gethash ,g!name managers)
-	 (assert (not active) nil "tried to activate manager ~a that is already activated~%" ,g!name)
-	 (setf active t)))))
-
-(defmacro! deactivate-manager (o!name from)
-  "deactivates manager o!name from pandoric 'from'; errors if not present, or present and not already active"
-  `(progn
-     (assert (manager-present-p ,g!name ,from) nil "tried to deactivate manager ~a that is not present" ,g!name)
-     (with-pandoric (managers) #',from
-       (with-pandoric (active) (gethash ,g!name managers)
-	 (assert active nil "tried to deactivate manager ~a that is already deactivated~%" ,g!name)
-	 (setf active nil)))))
-
-(defmacro! manager-active-p (o!name from)
-  "returns t/nil if manager o!name from pandoric 'from' is active; errors if not present"
-  `(progn
-     (assert (manager-present-p ,g!name ,from) nil "tried to check active flag for manager ~a that is not present" ,g!name)
-     (with-pandoric (managers) #',from
-       (get-pandoric (gethash ,g!name managers) 'active))))
-
-(defmacro! trim-data (data N)
-  "trims the ends off all channels in the data hash table, so that no channel is > N in length"
-  `(loop for ,g!channel being the hash-values of ,data
-      do (if (> (length ,g!channel) ,N)
-	     (setf ,g!channel (nbutlast ,g!channel)))))
-
 ;newly-discovered anaphoric cond; works just like cond, but stores the 
 ;value of each condition as 'it', which is accessable in the code
 ;following the condition
@@ -102,238 +13,265 @@
 		   ,@(cdr cl1))
 		 (acond ,@(cdr clauses)))))))
 
+(defmacro alet% (letargs &rest body)
+  `(let ((this) ,@letargs)
+     (setq this ,@(last body))
+     ,@(butlast body)
+     this))
+
+(defmacro alet (letargs &rest body)
+  `(let ((this) ,@letargs)
+     (setq this ,@(last body))
+     ,@(butlast body)
+     (lambda (&rest params)
+       (apply this params))))
+
+(defmacro! trim-data (data N)
+  "trims the ends off all channels in the data hash table, so that no channel is > N in length"
+  `(loop for ,g!channel being the hash-values of ,data
+      do (if (> (length ,g!channel) ,N)
+	     (setf ,g!channel (nbutlast ,g!channel)))))
+
+(let ((agents))
+  (setf (symbol-function 'agents)
+	(plambda () (agents)
+	  ())))
+
+;DEVS (discreet event simulator) that executes functions at the specified time, 
+;when active, you can pass functions to execute at each iteration (at quot)
+;and after each time the quota is reached (at quota)
+;the functioned returned is pandoric, so you can access/change state variables
+(defmacro define-job (&key (name) (quota) (QuotaFn) (QuotFn))
+    `(let ((quota ,quota)
+	   (quot 0)
+	   (name ,name)
+	   (active t))
+       (plambda () (name quot quota active)
+	 ,(if QuotFn
+	      `(if active (funcall ,QuotFn)))
+	 (incf quot)
+	 (when (eq quot quota)
+	   ,(if QuotaFn
+		`(if active (funcall ,QuotaFn)))
+	   (setf quot 0)))))
+
 ;defines a stream that is a pandoric function
 ;the function has an inner loop that processes all lines currently on strm!
 ;if a line is "[QUIT]", it will close the stream
 ;if a line is of the form "a=b", it will push the evaled value 'b' onto the channel 'a' in data
 ;otherwise, it will eval the line in place
-(defmacro define-stream (name)
+(defmacro make-socket (&key (bsd-stream) (bsd-socket))
   `(let (;stream that will be used to send & receive messages between the lisp backend & the stream
-	 (strm!)
-	 (sock!)
+	 (bsd-stream ,bsd-stream)
+	 (bsd-socket ,bsd-socket)
          ;data storing any received messages
 	 (data (make-hash-table :test #'equalp)) 
          ;maximum length of a channel in the data hash table
 	 (N 100)) 
-     (setf (symbol-function ',name)
-	   (plambda () (strm! sock! data N)
-	     (trim-data data N)
-	     (let ((line))
+     (plambda () (bsd-stream bsd-socket data N)
+       (trim-data data N)
+       (let ((line))
 	       ;update all of the raw data
-	       (while (handler-case (listen strm!) 
-			(error (condition) (declare (ignore condition)) nil))
-		 (setf line (uni-socket-read-line strm!))
-		 (acond ((string-equal line "[QUIT]")
-			 (if strm! (sb-bsd-sockets::close strm!))
-			 (if sock! (sb-bsd-sockets::socket-close sock!)))
-			((line2element line)
-			 (push (eval (read-from-string (cdr it))) (gethash (car it) data)))
-			(t
-			 (eval (read-from-string line))))))))))
+	 (while (handler-case (listen bsd-stream) 
+		  (error (condition) (declare (ignore condition)) nil))
+	   (setf line (uni-socket-read-line bsd-stream))
+	   (acond ((string-equal line "[QUIT]")
+		   (if bsd-stream (sb-bsd-sockets::close bsd-stream))
+		   (if bsd-socket (sb-bsd-sockets::socket-close bsd-socket)))
+		  ((line2element line)
+		   (push (eval (read-from-string (cdr it))) (gethash (car it) data)))
+		  (t
+		   (eval (read-from-string line)))))))))
 
-;update-OSX is responsible for storing all of the raw data from the OSX stream
-(define-stream update-OSX)
+(defmacro! add-job (o!job to)
+  "adds job o!job to pandoric 'to'; errors if already present"
+  `(let ((,g!name (get-pandoric ,g!job 'name)))
+     (assert (not (job-present-p ,g!name ,to)) nil "tried to add job ~a that is already present~%" ,g!name)
+     (with-pandoric (jobs) #',to
+       (setf (gethash ,g!name jobs) ,g!job))))
 
-(with-pandoric (socket) #'update-display
-  (setf socket #'update-OSX))
+(defmacro! remove-job (o!name from)
+  "removes job o!name from pandoric 'from'; errors if not already present"
+  `(progn
+     (assert (job-present-p ,g!name ,from) nil "tried to remove job ~a that is not present~%" ,g!name)
+     (with-pandoric (jobs) #',from
+       (remhash ,g!name jobs))))
 
-;update-DAQ is responsible for storing all of the raw data from the DAQ,
-;as well as storing all of the transformed data derived from the raw data
-(define-stream update-DAQ)
+(defmacro! job-present-p (o!name in)
+  "if job o!name is present in pandoric 'in'"
+  `(with-pandoric (jobs) #',in
+     (key-present ,g!name jobs)))
 
-(with-pandoric (socket) #'update-data
-  (setf socket #'update-DAQ))
+(defmacro! activate-job (o!name from)
+  "activates job o!name from pandoric 'from'; errors if not present, or present and already active"
+  `(progn
+     (assert (job-present-p ,g!name ,from) nil "tried to activate job ~a that is not present" ,g!name)
+     (with-pandoric (jobs) #',from
+       (with-pandoric (active) (gethash ,g!name jobs)
+	 (assert (not active) nil "tried to activate job ~a that is already activated~%" ,g!name)
+	 (setf active t)))))
 
-(defmacro get-datum (stream channelName)
-  "gets most recent datapoint in channel 'channel' in data hash table for the stream 'stream'"
-  `(car (gethash ,channelName (get-pandoric ,stream 'data))))
+(defmacro! deactivate-job (o!name from)
+  "deactivates job o!name from pandoric 'from'; errors if not present, or present and not already active"
+  `(progn
+     (assert (job-present-p ,g!name ,from) nil "tried to deactivate job ~a that is not present" ,g!name)
+     (with-pandoric (jobs) #',from
+       (with-pandoric (active) (gethash ,g!name jobs)
+	 (assert active nil "tried to deactivate job ~a that is already deactivated~%" ,g!name)
+	 (setf active nil)))))
 
+(defmacro! job-active-p (o!name from)
+  "returns t/nil if job o!name from pandoric 'from' is active; errors if not present"
+  `(progn
+     (assert (job-present-p ,g!name ,from) nil "tried to check active flag for job ~a that is not present" ,g!name)
+     (with-pandoric (jobs) #',from
+       (get-pandoric (gethash ,g!name jobs) 'active))))
 
-(defmacro get-channel (stream channelName)
-  "gets channel 'channel' in data hash table for the stream 'stram'"
-  `(gethash ,channelName (get-pandoric ,stream 'data)))
+;container to store a collection of jobs (in a hash table)
+;returns a pandoric function that will loop through all the jobs and 
+;execute the functions that have been latched to each job
+(defmacro define-agent (&key (name) (socket))
+  `(alet% ((jobs (make-hash-table :test #'equalp))
+	   (socket ,socket))
+	  (if socket
+	      (add-job (define-job :name (format nil "\"~a\"" (symbol-name ',name)) 
+			     :quota 1 
+			     :quotaFn socket) 
+			   ,name))
+	  (push-to-end ',name (get-pandoric #'agents 'agents))
+	  (setf (symbol-function ',name)
+		(plambda () (jobs socket)
+		  (loop for job being the hash-values of jobs
+			 do (funcall job))))))
 
-(defmacro! add-to-from-that (managers toChannel fromChannel o!name quota)
+(defun print-agents (&rest agents)
+  "print agents 'agents'"
+  (dolist (agent agents)
+    (with-pandoric (jobs) (symbol-function agent)
+      (loop for job being the hash-values of jobs
+	 do (with-pandoric (name active quot quota) job
+	      (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" agent name active quot quota))))))
+
+(defmacro get-socket (agent)
+  `(get-pandoric #',agent 'socket))
+
+(defmacro get-bsd-stream (agent)
+  `(get-pandoric (get-socket ,agent) 'bsd-stream))
+
+(defmacro get-data (agent)
+  `(get-pandoric (get-socket ,agent) 'data))
+
+(defmacro get-channel (agent channelName)
+  `(gethash ,channelName (get-data ,agent)))
+
+(defmacro get-datum (agent channelName)
+  `(car (get-channel ,agent ,channelName)))
+
+(defmacro! add-channel% (toAgent fromAgent o!name quota)
   "attaches a channel from 'from' to 'to' stream"
-  `(add-manager
-    (define-manager :name ,g!name :quota ,quota
-		    :quotaFn
-		    (lambda ()
-		      (with-pandoric (strm!) #',toChannel
-			(aif (get-datum #',fromChannel ,g!name)
-			     (uni-send-string strm! (format nil "~a=~a~%" ,g!name it))))))
-    ,managers))
-
-(defmacro! add-transform (managers o!name quota o!from xfer-fn)
+  `(add-job
+    (define-job :name ,g!name :quota ,quota
+		    :quotaFn (lambda ()
+			       (aif (get-datum ,fromAgent ,g!name)
+				    (uni-send-string (get-bsd-stream ,toAgent) 
+						     (format nil "~a=~a~%" ,g!name it)))))
+    ,toAgent))
+(defmacro add-channel (&key (toAgent) (fromAgent) (name) (quota))
+  `(add-channel% ,toAgent ,fromAgent ,name ,quota))
+  
+(defmacro! add-transform% (agent o!name quota o!fromName xferFn)
   "adds a channel to data who's value is a function of another channel; xfer-fn defines the transfer function (f(x); x is from, f(x) is to)"
-  `(add-manager
-    (define-manager :name ,g!name :quota ,quota
-		    :quotaFn  
-		    (lambda ()
-		      ;anaphor b/c we're injecting a xfer-fn that has an 'x' defined
-		      (let ((x (get-datum (get-pandoric #',managers 'socket) ,g!from))) 
-			(if x
-			    (push ,xfer-fn (get-channel (get-pandoric #',managers 'socket) ,g!name))))))
-    ,managers))
-              
-;;;you should only need to access functions/macros below to do stuff
-(defmacro add-display (&rest rest)
-  "adds a display manager"
-  `(add-manager
-    (define-manager ,@rest)
-    update-display))
+  `(add-job
+    (define-job :name ,g!name :quota ,quota
+		    :quotaFn (lambda ()
+			       ;anaphor b/c we're injecting a xferFn that has an 'x' defined
+			       (let ((x (get-datum ,agent ,g!fromName))) 
+				 (if x
+				     (push ,xferFn (get-channel ,agent ,g!name))))))
+    ,agent))
+(defmacro add-transform (&key (agent) (name) (quota) (fromName) (xferFn))
+  `(add-transform% ,agent ,name ,quota ,fromName ,xferFn))
 
-(defmacro add-data (&rest rest)
-  "adds a data manager"
-  `(add-manager
-    (define-manager ,@rest)
-    update-data))
+(defun print-all ()
+  "prints all of the agents that have been created"
+  (apply #'print-agents (get-pandoric #'agents 'agents)))
 
-(defmacro remove-display (name)
-  "removes display manager 'name'"
-  `(remove-manager ,name update-display))
+(defun update-all ()
+  "updates all of the agents that have been created"
+  (dolist (agent (get-pandoric #'agents 'agents))
+    (funcall (symbol-function agent))))
+     
 
-(defmacro remove-data (name)
-  "removes data manager 'name'"
-  `(remove-manager ,name update-data))
-
-(defmacro print-display ()
-  "prints display managers"
-  `(print-managers update-display))
-
-(defmacro print-data ()
-  "prints data managers"
-  `(print-managers update-data))
-
-(defmacro activate-display (name)
-  "activates display manager 'name'"
-  `(activate-manager ,name update-display))
-
-(defmacro activate-data (name)
-  "activates data manager 'name'"
-  `(activate-manager ,name update-data))
-
-(defmacro deactivate-display (name)
-  "deactivates display manager 'name'"
-  `(deactivate-manager ,name update-display))
-
-(defmacro deactivate-data (name)
-  "deactivates data manager 'name'"
-  `(deactivate-manager ,name update-data))
-
-(defmacro display-active-p (name)
-  "returns t/f display manager 'name' is active"
-  `(manager-active-p ,name update-display))
-
-(defmacro data-active-p (name)
-  "returns t/f data manager 'name' is active"
-  `(manager-active-p ,name update-data))
-
-(defmacro display-present-p (name)
-  "returns t/f display manager 'name' is present"
-  `(manager-present-p ,name update-display))
-
-(defmacro data-present-p (name)
-  "returns t/f data manager 'name' is present"
-  `(manager-present-p ,name update-data))
-
-(defmacro add-display-from-data (&key (name) (quota))
-  "attaches a data channel to the display stream"
-  `(add-to-from-that update-display update-OSX update-DAQ ,name ,quota))
-
-(defmacro add-data-from-display (&key (name) (quota))
-  "attaches a display channel to the data stream"
-  `(add-to-from-that update-data update-DAQ update-OSX ,name ,quota))
-
-(defmacro add-display-transform (&key (name) (quota) (from) (xferfn))
-  "transforms a display channel"
-  `(add-transform update-display ,name ,quota ,from ,xferFn))
-
-(defmacro add-data-transform (&key (name) (quota) (from) (xferFn))
-  "transforms a data channel"
-  `(add-transform update-data ,name ,quota ,from ,xferFn))
-
-(defmacro get-display-datum (channel)
-  "gets most recent datapoint in channel 'channel' in data hash table for the display (OSX) stream"
-  `(get-datum #'update-OSX ,channel))
-
-(defmacro get-data-datum (channel)
-  "gets most recent datapoint in channel 'channel' in data hash table for the data (DAQ) stream"
-  `(get-datum #'update-DAQ ,channel))
-
-(defmacro print-all ()
-  "prints all managers currently present"
-  `(progn
-     (print-display)
-     (print-data)))
-
-(defmacro update-all ()
-  "updates all managers currently present"
-  `(progn
-     (update-data)
-     (update-display)))
 
 ;top-level function that runs the lisp backend server
 (defun run-server ()
-  ;we need to somehow initialize the DAQ-strm
-  ;this isn't quite correct yet, b/c the actual numbers that are sent from the DAQ are very raw (only numbers, no labels)
-  ;we'll need to set up a separate strm that is connected to the DAQ, that processes the raw numbers, and then reroutes
-  ;the results to this strm, in the "channelName=value~%" format
-  (with-pandoric (strm!) #'update-DAQ
-    (setf strm! 
-	  (make-string-input-stream
-	   (with-output-to-string (out)
-	     (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ strem
-	     (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
-	     (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
-	     ))))
-  ;initialize the OSX-strm
-  (with-pandoric (strm! sock!) #'update-OSX
-    (multiple-value-setq (strm! sock!) (uni-prepare-socket "127.0.0.1" 9558)))
-    
-  ;;;define the events for the data manager
+  ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
+  (define-agent :name DAQ 
+    :socket (make-socket :bsd-stream 
+			 (make-string-input-stream
+			  (with-output-to-string (out)
+			    (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ strem
+			    (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
+			    (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
+			    ))))
   
-  ;first the DAQ incomings wil be updated
-  (add-data :name "update-DAQ" :quota 1 :quotaFn #'update-DAQ)
-  ;chain on any other functions to further process the raw data
+  ;agent in charge of all jobs concerning the display (that is, the lisp->os x bridge)
+  (multiple-value-bind (bsd-stream bsd-socket) (uni-prepare-socket "127.0.0.1" 9557)
+    (define-agent :name display 
+      :socket (make-socket :bsd-stream bsd-stream
+			   :bsd-socket bsd-socket)))
+
+  ;;;define the jobs for the DAQ agent
+  
   ;for kicks, lets do a linear transformation on one of the channels in the DAQ
-  (add-data-transform :name "RPM" :quota 4 :from "RPM-Raw" :xferFn (+ x (* x 100) 5))
+  (add-transform :agent DAQ 
+		 :name "RPM" 
+		 :fromName "RPM-Raw" 
+		 :xferFn (+ x (* x 100) 5)
+		 :quota 4)
   ;this pattern can take care of calibration signals sent from OSX 
-  (add-data-transform :name "RPM-Special" :quota 2 :from "RPM-Raw" :xferFn (* x (aif (get-display-datum "RPM-xfer-m") it 1)))
+  (add-transform :agent DAQ
+		 :name "RPM-Special" 
+		 :fromName "RPM-Raw" 
+		 :xferFn (* x (aif (get-datum display "RPM-xfer-m") it 1))
+		 :quota 2)
 
-
-
-  ;then initialize any DAQ outgoings
-  ;;;add-data-from-display ...
-
-
-  ;;;define the events for the display manager
-
-  ;first the OSX incomings will be updated
-  (add-display :name "update-OSX" :quota 1 :quotaFn #'update-OSX)
-  ;chain on any other functions to further process the raw data
-  ;add-display-transform...
+  ;;;define the jobs for the display agent
 
   ;then initialize any OSX outgoings
-  (add-display-from-data :name "RPM" :quota 1)
-  (add-display-from-data :name "RPM-Raw" :quota 2)
-  (add-display-from-data :name "RPM-Special" :quota 1)
-
+  (add-channel :toAgent display
+	       :fromAgent DAQ
+	       :name "RPM"
+	       :quota 1)
   
-  (print-all) ;print the data and display managers that will be called each time 'update-call' is called
+  (add-channel :toAgent display
+	       :fromAgent DAQ
+	       :name "RPM-Raw"
+	       :quota 2)
+  
+  (add-channel :toAgent display
+	       :fromAgent DAQ
+	       :name "RPM-Special"
+	       :quota 1)
+  
+  ;display all agents and their jobs that will be called each time 'update-call' is called
+  (print-all) 
 
+  ;call 'update-all' a bunch of times; this will eventually turn into the 'while' loop 
+  ;that keeps looping forever; checking for new agents that want to sign on... letting agents
+  ;sign off; adding jobs to different agents, and running all the jobs, etc.
   (time
-   (with-pandoric (sock! strm!) #'update-OSX
+   (with-pandoric (bsd-socket bsd-stream) (get-socket display)
      ;just looping through N times for now; eventually, this will be looped until os x signals an exit
      (let ((i 0))
-       (while (and (< (incf i) 5000) sock! (sb-bsd-sockets::socket-open-p sock!))
+       (while (and (< (incf i) 50) bsd-socket (sb-bsd-sockets::socket-open-p bsd-socket))
 	 (update-all)))
      ;telling the os x client to exit
-     (uni-send-string strm! (format nil "[QUIT]~%"))
+     (uni-send-string bsd-stream (format nil "[QUIT]~%"))
      ;ox x will receive the exit signal, and send one back (letting the server know that it's going to kill itself)
      ;we wait until the client sends the exit signal back, and then exit the server
-     (while (and sock! (sb-bsd-sockets::socket-open-p sock!))
-       (funcall #'update-OSX)))))
+     (while (and bsd-socket (sb-bsd-sockets::socket-open-p bsd-socket))
+       (funcall (get-socket display))))))
 
 
 
