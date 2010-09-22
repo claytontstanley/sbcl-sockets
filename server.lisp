@@ -144,14 +144,6 @@
 		  (loop for job being the hash-values of jobs
 			 do (funcall job))))))
 
-(defun print-agents (&rest agents)
-  "print agents 'agents'"
-  (dolist (agent agents)
-    (with-pandoric (jobs) (symbol-function agent)
-      (loop for job being the hash-values of jobs
-	 do (with-pandoric (name active quot quota) job
-	      (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" agent name active quot quota))))))
-
 (defmacro get-socket (agent)
   `(get-pandoric #',agent 'socket))
 
@@ -192,17 +184,27 @@
 (defmacro add-transform (&key (agent) (name) (quota) (fromName) (xferFn))
   `(add-transform% ,agent ,name ,quota ,fromName ,xferFn))
 
-(defun print-all ()
+(defmacro! print-agent (o!agent)
+  "print agent 'agent'"
+  `(with-pandoric (jobs) (symbol-function ,g!agent)
+     (loop for job being the hash-values of jobs
+	do (with-pandoric (name active quot quota) job
+	     (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" ,g!agent name active quot quota)))))
+
+(defmacro! print-agents ()
   "prints all of the agents that have been created"
-  (apply #'print-agents (get-pandoric #'agents 'agents)))
+  `(dolist (,g!agent (get-pandoric #'agents 'agents))
+     (print-agent ,g!agent)))
 
-(defun update-all ()
+(defmacro update-agent (agent)
+  "updates agent 'agent'"
+  `(funcall (symbol-function ,agent)))
+
+(defmacro! update-agents ()
   "updates all of the agents that have been created"
-  (dolist (agent (get-pandoric #'agents 'agents))
-    (funcall (symbol-function agent))))
+  `(dolist (,g!agent (get-pandoric #'agents 'agents))
+     (update-agent ,g!agent)))
      
-
-
 ;top-level function that runs the lisp backend server
 (defun run-server ()
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
@@ -255,7 +257,7 @@
 	       :quota 1)
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
-  (print-all) 
+  (print-agents) 
 
   ;call 'update-all' a bunch of times; this will eventually turn into the 'while' loop 
   ;that keeps looping forever; checking for new agents that want to sign on... letting agents
@@ -265,7 +267,7 @@
      ;just looping through N times for now; eventually, this will be looped until os x signals an exit
      (let ((i 0))
        (while (and (< (incf i) 50) bsd-socket (sb-bsd-sockets::socket-open-p bsd-socket))
-	 (update-all)))
+	 (update-agents)))
      ;telling the os x client to exit
      (uni-send-string bsd-stream (format nil "[QUIT]~%"))
      ;ox x will receive the exit signal, and send one back (letting the server know that it's going to kill itself)
