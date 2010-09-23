@@ -33,9 +33,8 @@
 	     (setf ,g!channel (nbutlast ,g!channel)))))
 
 (let ((agents))
-  (setf (symbol-function 'agents)
-	(plambda () (agents)
-	  ())))
+  (defpun agents () (agents)
+    ()))
 
 ;DEVS (discreet event simulator) that executes functions at the specified time, 
 ;when active, you can pass functions to execute at each iteration (at quot)
@@ -77,7 +76,7 @@
 	   (setf line (uni-socket-read-line bsd-stream))
 	   (acond ((string-equal line "[QUIT]")
 		   (if bsd-stream (sb-bsd-sockets::close bsd-stream))
-		   (if bsd-socket (sb-bsd-sockets::socket-close bsd-socket)))
+		   (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket)))
 		  ((line2element line)
 		   (push (eval (read-from-string (cdr it))) (gethash (car it) data)))
 		  (t
@@ -130,6 +129,7 @@
 ;container to store a collection of jobs (in a hash table)
 ;returns a pandoric function that will loop through all the jobs and 
 ;execute the functions that have been latched to each job
+;FIXME; this macro needs some work
 (defmacro define-agent (&key (name) (socket))
   `(alet% ((jobs (make-hash-table :test #'equalp))
 	   (socket ,socket))
@@ -139,10 +139,9 @@
 			     :quotaFn socket) 
 			   ,name))
 	  (push-to-end ',name (get-pandoric #'agents 'agents))
-	  (setf (symbol-function ',name)
-		(plambda () (jobs socket)
-		  (loop for job being the hash-values of jobs
-			 do (funcall job))))))
+	  (defpun ,name () (jobs socket)
+	    (loop for job being the hash-values of jobs
+	       do (funcall job)))))
 
 (defmacro get-socket (agent)
   `(get-pandoric #',agent 'socket))
@@ -266,13 +265,13 @@
    (with-pandoric (bsd-socket bsd-stream) (get-socket display)
      ;just looping through N times for now; eventually, this will be looped until os x signals an exit
      (let ((i 0))
-       (while (and (< (incf i) 50) bsd-socket (sb-bsd-sockets::socket-open-p bsd-socket))
+       (while (and (< (incf i) 50) bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
 	 (update-agents)))
      ;telling the os x client to exit
      (uni-send-string bsd-stream (format nil "[QUIT]~%"))
      ;ox x will receive the exit signal, and send one back (letting the server know that it's going to kill itself)
      ;we wait until the client sends the exit signal back, and then exit the server
-     (while (and bsd-socket (sb-bsd-sockets::socket-open-p bsd-socket))
+     (while (and bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
        (funcall (get-socket display))))))
 
 
