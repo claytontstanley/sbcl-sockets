@@ -86,26 +86,26 @@
   "adds job o!job to pandoric 'to'; errors if already present"
   `(let ((,g!name (get-pandoric ,g!job 'name)))
      (assert (not (job-present-p ,g!name ,to)) nil "tried to add job ~a that is already present~%" ,g!name)
-     (with-pandoric (jobs) #',to
+     (with-pandoric (jobs) ',to
        (setf (gethash ,g!name jobs) ,g!job))))
 
 (defmacro! remove-job (o!name from)
   "removes job o!name from pandoric 'from'; errors if not already present"
   `(progn
      (assert (job-present-p ,g!name ,from) nil "tried to remove job ~a that is not present~%" ,g!name)
-     (with-pandoric (jobs) #',from
+     (with-pandoric (jobs) ',from
        (remhash ,g!name jobs))))
 
 (defmacro! job-present-p (o!name in)
   "if job o!name is present in pandoric 'in'"
-  `(with-pandoric (jobs) #',in
+  `(with-pandoric (jobs) ',in
      (key-present ,g!name jobs)))
 
 (defmacro! activate-job (o!name from)
   "activates job o!name from pandoric 'from'; errors if not present, or present and already active"
   `(progn
      (assert (job-present-p ,g!name ,from) nil "tried to activate job ~a that is not present" ,g!name)
-     (with-pandoric (jobs) #',from
+     (with-pandoric (jobs) ',from
        (with-pandoric (active) (gethash ,g!name jobs)
 	 (assert (not active) nil "tried to activate job ~a that is already activated~%" ,g!name)
 	 (setf active t)))))
@@ -114,7 +114,7 @@
   "deactivates job o!name from pandoric 'from'; errors if not present, or present and not already active"
   `(progn
      (assert (job-present-p ,g!name ,from) nil "tried to deactivate job ~a that is not present" ,g!name)
-     (with-pandoric (jobs) #',from
+     (with-pandoric (jobs) ',from
        (with-pandoric (active) (gethash ,g!name jobs)
 	 (assert active nil "tried to deactivate job ~a that is already deactivated~%" ,g!name)
 	 (setf active nil)))))
@@ -123,7 +123,7 @@
   "returns t/nil if job o!name from pandoric 'from' is active; errors if not present"
   `(progn
      (assert (job-present-p ,g!name ,from) nil "tried to check active flag for job ~a that is not present" ,g!name)
-     (with-pandoric (jobs) #',from
+     (with-pandoric (jobs) ',from
        (get-pandoric (gethash ,g!name jobs) 'active))))
 
 ;container to store a collection of jobs (in a hash table)
@@ -131,20 +131,20 @@
 ;execute the functions that have been latched to each job
 ;FIXME; this macro needs some work
 (defmacro define-agent (&key (name) (socket))
-  `(alet% ((jobs (make-hash-table :test #'equalp))
-	   (socket ,socket))
-	  (if socket
-	      (add-job (define-job :name (format nil "\"~a\"" (symbol-name ',name)) 
-			     :quota 1 
-			     :quotaFn socket) 
-			   ,name))
-	  (push-to-end ',name (get-pandoric #'agents 'agents))
-	  (defpun ,name () (jobs socket)
-	    (loop for job being the hash-values of jobs
-	       do (funcall job)))))
+  `(let ((jobs (make-hash-table :test #'equalp))
+	 (socket ,socket))
+     (defpun ,name () (jobs socket)
+       (loop for job being the hash-values of jobs
+	  do (funcall job)))
+     (if socket
+	 (add-job (define-job :name (format nil "\"~a\"" (symbol-name ',name)) 
+		    :quota 1 
+		    :quotaFn socket) 
+		  ,name))
+     (push-to-end ',name (get-pandoric 'agents 'agents))))
 
 (defmacro get-socket (agent)
-  `(get-pandoric #',agent 'socket))
+  `(get-pandoric ',agent 'socket))
 
 (defmacro get-bsd-stream (agent)
   `(get-pandoric (get-socket ,agent) 'bsd-stream))
@@ -155,33 +155,44 @@
 (defmacro get-channel (agent channelName)
   `(gethash ,channelName (get-data ,agent)))
 
-(defmacro get-datum (agent channelName)
-  `(car (get-channel ,agent ,channelName)))
+(defmacro get-datum (channelName agent &key (N 1))
+  (if (equal N 1)
+      `(car (get-channel ,agent ,channelName))
+      `(aif (get-channel ,agent ,channelName)
+	    (subseq it 0 (min ,N (length it))))))
 
-(defmacro! add-channel% (toAgent fromAgent o!name quota)
-  "attaches a channel from 'from' to 'to' stream"
-  `(add-job
-    (define-job :name ,g!name :quota ,quota
-		    :quotaFn (lambda ()
-			       (aif (get-datum ,fromAgent ,g!name)
-				    (uni-send-string (get-bsd-stream ,toAgent) 
-						     (format nil "~a=~a~%" ,g!name it)))))
-    ,toAgent))
-(defmacro add-channel (&key (toAgent) (fromAgent) (name) (quota))
-  `(add-channel% ,toAgent ,fromAgent ,name ,quota))
+(defmacro with-channels (channels &body body)
+  `(let ,(mapcar (lambda (channel)
+		   `(,(car channel) (get-datum ,(symbol-name (car channel)) ,@(cdr channel))))
+		 channels)
+     ,@body))
+
+;(defmacro get-channel (channel)
   
-(defmacro! add-transform% (agent o!name quota o!fromName xferFn)
-  "adds a channel to data who's value is a function of another channel; xfer-fn defines the transfer function (f(x); x is from, f(x) is to)"
+  
+(defmacro! add-output% (agent name quota value)
   `(add-job
-    (define-job :name ,g!name :quota ,quota
-		    :quotaFn (lambda ()
-			       ;anaphor b/c we're injecting a xferFn that has an 'x' defined
-			       (let ((x (get-datum ,agent ,g!fromName))) 
-				 (if x
-				     (push ,xferFn (get-channel ,agent ,g!name))))))
+    (define-job :name ,(symbol-name name) :quota ,quota
+		:quotaFn (lambda ()
+			   (aif ,value
+				(uni-send-string (get-bsd-stream ,agent)
+						 (format nil "~a=~a~%" ,(symbol-name name) it)))))
     ,agent))
-(defmacro add-transform (&key (agent) (name) (quota) (fromName) (xferFn))
-  `(add-transform% ,agent ,name ,quota ,fromName ,xferFn))
+(defmacro add-output (&key (agent) (name) (quota) (value))
+  `(add-output% ,agent ,name ,quota ,value))
+
+
+(defmacro! add-channel% (to name quota value)
+  (if (not name) (setf name (car to)))
+  "adds a channel to data who's value is a function of another channel"
+  `(add-job
+    (define-job :name ,(symbol-name name) :quota ,quota
+		:quotaFn (lambda ()
+			   (aif ,value
+				(push it (get-channel ,(cadr to) ,(symbol-name (car to)))))))
+    ,(cadr to)))
+(defmacro add-channel (&key (to) (name) (quota) (value))
+  `(add-channel% ,to ,name ,quota ,value))
 
 (defmacro! print-agent (o!agent)
   "print agent 'agent'"
@@ -192,7 +203,7 @@
 
 (defmacro! print-agents ()
   "prints all of the agents that have been created"
-  `(dolist (,g!agent (get-pandoric #'agents 'agents))
+  `(dolist (,g!agent (get-pandoric 'agents 'agents))
      (print-agent ,g!agent)))
 
 (defmacro update-agent (agent)
@@ -203,9 +214,12 @@
   "updates all of the agents that have been created"
   `(dolist (,g!agent (get-pandoric #'agents 'agents))
      (update-agent ,g!agent)))
+
+
      
 ;top-level function that runs the lisp backend server
 (defun run-server ()
+
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
   (define-agent :name DAQ 
     :socket (make-socket :bsd-stream 
@@ -225,35 +239,37 @@
   ;;;define the jobs for the DAQ agent
   
   ;for kicks, lets do a linear transformation on one of the channels in the DAQ
-  (add-transform :agent DAQ 
-		 :name "RPM" 
-		 :fromName "RPM-Raw" 
-		 :xferFn (+ x (* x 100) 5)
-		 :quota 4)
+  (add-channel :to (rpm DAQ)
+	       :value (with-channels ((rpm-raw DAQ))
+			(+ rpm-raw (* rpm-raw 100) 5))
+	       :quota 4)
+
   ;this pattern can take care of calibration signals sent from OSX 
-  (add-transform :agent DAQ
-		 :name "RPM-Special" 
-		 :fromName "RPM-Raw" 
-		 :xferFn (* x (aif (get-datum display "RPM-xfer-m") it 1))
-		 :quota 2)
+  (add-channel :to (rpm-special DAQ)
+	       :value (with-channels ((rpm-raw DAQ) (rpm-xfer-m display :N 30))
+			 (if (and rpm-raw rpm-xfer-m) (* rpm-raw (mean rpm-xfer-m))))
+	       :quota 2)
 
   ;;;define the jobs for the display agent
 
   ;then initialize any OSX outgoings
-  (add-channel :toAgent display
-	       :fromAgent DAQ
-	       :name "RPM"
-	       :quota 1)
+  (add-output :agent display 
+	      :name RPM
+	      :value (with-channels ((RPM DAQ))
+		       RPM)
+	      :quota 1)
   
-  (add-channel :toAgent display
-	       :fromAgent DAQ
-	       :name "RPM-Raw"
-	       :quota 2)
-  
-  (add-channel :toAgent display
-	       :fromAgent DAQ
-	       :name "RPM-Special"
-	       :quota 1)
+  (add-output :agent display
+	      :name RPM-Raw
+	      :value (with-channels ((RPM-Raw DAQ))
+		       RPM-Raw)
+	      :quota 1)
+
+  (add-output :agent display
+	      :name RPM-Special
+	      :value (with-channels ((RPM-Special DAQ))
+		       RPM-Special)
+	      :quota 1)
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
   (print-agents) 
