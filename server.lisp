@@ -152,23 +152,23 @@
 (defmacro get-data (agent)
   `(get-pandoric (get-socket ,agent) 'data))
 
-(defmacro get-channel (agent channelName)
-  `(gethash ,channelName (get-data ,agent)))
-
-(defmacro get-datum (channelName agent &key (N 1))
-  (if (equal N 1)
-      `(car (get-channel ,agent ,channelName))
-      `(aif (get-channel ,agent ,channelName)
-	    (subseq it 0 (min ,N (length it))))))
+(defmacro get-channel (channel agent &key (N))
+  (let ((channel `(gethash ,(symbol-name channel) (get-data ,agent))))
+    (acond ((not N)
+	    channel)
+	   ((equal N 1)
+	    `(car ,channel))
+	   (channel
+	    `(subseq ,it 0 (min ,N (length ,it)))))))
 
 (defmacro with-channels (channels &body body)
   `(let ,(mapcar (lambda (channel)
-		   `(,(car channel) (get-datum ,(symbol-name (car channel)) ,@(cdr channel))))
+		   `(,(car channel) (get-channel ,@channel)))
 		 channels)
      ,@body))
 
-;(defmacro get-channel (channel)
-  
+(defmacro with-channel (channel &body body)
+  `(with-channels (,channel) ,@body))
   
 (defmacro! add-output% (agent name quota value)
   `(add-job
@@ -182,17 +182,16 @@
   `(add-output% ,agent ,name ,quota ,value))
 
 
-(defmacro! add-channel% (to name quota value)
-  (if (not name) (setf name (car to)))
+(defmacro! add-channel% (agent name quota value)
   "adds a channel to data who's value is a function of another channel"
   `(add-job
     (define-job :name ,(symbol-name name) :quota ,quota
 		:quotaFn (lambda ()
 			   (aif ,value
-				(push it (get-channel ,(cadr to) ,(symbol-name (car to)))))))
-    ,(cadr to)))
-(defmacro add-channel (&key (to) (name) (quota) (value))
-  `(add-channel% ,to ,name ,quota ,value))
+				(push it (get-channel ,name ,agent)))))
+    ,agent))
+(defmacro add-channel (&key (agent) (name) (quota) (value))
+  `(add-channel% ,agent ,name ,quota ,value))
 
 (defmacro! print-agent (o!agent)
   "print agent 'agent'"
@@ -239,14 +238,16 @@
   ;;;define the jobs for the DAQ agent
   
   ;for kicks, lets do a linear transformation on one of the channels in the DAQ
-  (add-channel :to (rpm DAQ)
-	       :value (with-channels ((rpm-raw DAQ))
+  (add-channel :agent DAQ
+	       :name RPM
+	       :value (with-channel (rpm-raw DAQ :N 1)
 			(+ rpm-raw (* rpm-raw 100) 5))
 	       :quota 4)
 
   ;this pattern can take care of calibration signals sent from OSX 
-  (add-channel :to (rpm-special DAQ)
-	       :value (with-channels ((rpm-raw DAQ) (rpm-xfer-m display :N 30))
+  (add-channel :agent DAQ
+	       :name RPM-Special
+	       :value (with-channels ((rpm-raw DAQ :N 1) (rpm-xfer-m display :N 30))
 			 (if (and rpm-raw rpm-xfer-m) (* rpm-raw (mean rpm-xfer-m))))
 	       :quota 2)
 
@@ -255,20 +256,17 @@
   ;then initialize any OSX outgoings
   (add-output :agent display 
 	      :name RPM
-	      :value (with-channels ((RPM DAQ))
-		       RPM)
+	      :value (get-channel RPM DAQ :N 1)
 	      :quota 1)
   
   (add-output :agent display
 	      :name RPM-Raw
-	      :value (with-channels ((RPM-Raw DAQ))
-		       RPM-Raw)
+	      :value (get-channel RPM-Raw DAQ :N 1)
 	      :quota 1)
 
   (add-output :agent display
 	      :name RPM-Special
-	      :value (with-channels ((RPM-Special DAQ))
-		       RPM-Special)
+	      :value (get-channel RPM-Special DAQ :N 1)
 	      :quota 1)
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
