@@ -1,9 +1,10 @@
+;load some functions that make it easier to send/receive messages across a socket
 (load "uni-files.lisp")
 
-;newly-discovered anaphoric cond; works just like cond, but stores the 
-;value of each condition as 'it', which is accessable in the code
-;following the condition
 (defmacro! acond (&rest clauses)
+ "works just like cond, but stores the 
+  value of each condition as 'it', which is accessable in the code
+  following the condition"
     (if clauses
 	(let ((cl1 (car clauses)))
 	  `(let ((,g!sym ,(car cl1)))
@@ -19,15 +20,11 @@
       do (if (> (length ,g!channel) ,N)
 	     (setf ,g!channel (nbutlast ,g!channel)))))
 
-(let ((agents))
-  (defpun agents () (agents)
-    ()))
-
-;DEVS (discreet event simulator) that executes functions at the specified time, 
-;when active, you can pass functions to execute at each iteration (at quot)
-;and after each time the quota is reached (at quota)
-;the functioned returned is pandoric, so you can access/change state variables
 (defmacro define-job (&key (name) (quota) (QuotaFn) (QuotFn))
+  "discrete event simulator that executes functions at the specified time, 
+   when active, you can pass functions to execute at each iteration (at quot)
+   and after each time the quota is reached (at quota)
+   the functioned returned is pandoric, so you can access/change state variables"
     `(let ((quota ,quota)
 	   (quot 0)
 	   (name ',name)
@@ -57,7 +54,7 @@
      (plambda () (bsd-stream bsd-socket data N)
        (trim-data data N)
        (let ((line))
-	       ;update all of the raw data
+	 ;update all of the raw data
 	 (while (handler-case (listen bsd-stream) 
 		  (error (condition) (declare (ignore condition)) nil))
 	   (setf line (uni-socket-read-line bsd-stream))
@@ -130,15 +127,19 @@
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
 (defmacro get-socket (agent)
+  "returns the agent's socket"
   `(get-pandoric ',agent 'socket))
 
 (defmacro get-bsd-stream (agent)
+  "returns the bsd-stream inside the agent's socket"
   `(get-pandoric (get-socket ,agent) 'bsd-stream))
 
 (defmacro get-data (agent)
+  "returns the data hash table inside the agent's socket"
   `(get-pandoric (get-socket ,agent) 'data))
 
 (defmacro get-channel (channel agent &key (N))
+  "returns a channel (or subset of the channel) in the data hash table inside the agent's socket"
   (setf channel `(gethash ,(symbol-name channel) (get-data ,agent)))
   (cond ((not N)
 	 channel)
@@ -147,13 +148,16 @@
 	(t
 	 `(subseq ,channel 0 (min ,N (length ,channel))))))
 
+;TODO; can you allow 'write' access as well? that would be pretty sweet
 (defmacro with-channels (channels &body body)
+  "allows read access to each channel in the 'body forms; access using the channel's name"
   `(let ,(mapcar (lambda (channel)
 		   `(,(car channel) (get-channel ,@channel)))
 		 channels)
      ,@body))
 
 (defmacro with-channel (channel &body body)
+  "same as with-channels, but use when you only want to access a single channel"
   `(with-channels (,channel) ,@body))
   
 (defmacro add-output (&key (agent) (name) (quota) (value))
@@ -196,10 +200,13 @@
   `(dolist (,g!agent (get-pandoric #'agents 'agents))
      (update-agent ,g!agent)))
 
-
+(let ((agents))
+  (defpun agents () (agents)
+    ()))
      
-;top-level function that runs the lisp backend server
 (defun run-server ()
+  "top-level function that runs the lisp backend server"
+
 
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
   (define-agent :name DAQ 
