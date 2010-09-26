@@ -13,19 +13,6 @@
 		   ,@(cdr cl1))
 		 (acond ,@(cdr clauses)))))))
 
-(defmacro alet% (letargs &rest body)
-  `(let ((this) ,@letargs)
-     (setq this ,@(last body))
-     ,@(butlast body)
-     this))
-
-(defmacro alet (letargs &rest body)
-  `(let ((this) ,@letargs)
-     (setq this ,@(last body))
-     ,@(butlast body)
-     (lambda (&rest params)
-       (apply this params))))
-
 (defmacro! trim-data (data N)
   "trims the ends off all channels in the data hash table, so that no channel is > N in length"
   `(loop for ,g!channel being the hash-values of ,data
@@ -43,7 +30,7 @@
 (defmacro define-job (&key (name) (quota) (QuotaFn) (QuotFn))
     `(let ((quota ,quota)
 	   (quot 0)
-	   (name ,name)
+	   (name ',name)
 	   (active t))
        (plambda () (name quot quota active)
 	 ,(if QuotFn
@@ -54,12 +41,12 @@
 		`(if active (funcall ,QuotaFn)))
 	   (setf quot 0)))))
 
-;defines a stream that is a pandoric function
-;the function has an inner loop that processes all lines currently on strm!
-;if a line is "[QUIT]", it will close the stream
-;if a line is of the form "a=b", it will push the evaled value 'b' onto the channel 'a' in data
-;otherwise, it will eval the line in place
 (defmacro make-socket (&key (bsd-stream) (bsd-socket))
+  "defines a socket that is a pandoric function
+   the function has an inner loop that processes all lines currently on the stream;
+   if a line is '[QUIT]', it will close the stream;
+   if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
+   otherwise, it will eval the line in place"
   `(let (;stream that will be used to send & receive messages between the lisp backend & the stream
 	 (bsd-stream ,bsd-stream)
 	 (bsd-socket ,bsd-socket)
@@ -126,18 +113,17 @@
      (with-pandoric (jobs) ',from
        (get-pandoric (gethash ,g!name jobs) 'active))))
 
-;container to store a collection of jobs (in a hash table)
-;returns a pandoric function that will loop through all the jobs and 
-;execute the functions that have been latched to each job
-;FIXME; this macro needs some work
 (defmacro define-agent (&key (name) (socket))
-  `(let ((jobs (make-hash-table :test #'equalp))
+  "container to store a collection of jobs (in a hash table)
+   defines a pandoric function that will loop through all the jobs and 
+   execute the functions that have been latched to each job"
+  `(let ((jobs (make-hash-table))
 	 (socket ,socket))
      (defpun ,name () (jobs socket)
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
      (if socket
-	 (add-job (define-job :name (format nil "\"~a\"" (symbol-name ',name)) 
+	 (add-job (define-job :name ,name
 		    :quota 1 
 		    :quotaFn socket) 
 		  ,name))
@@ -153,13 +139,13 @@
   `(get-pandoric (get-socket ,agent) 'data))
 
 (defmacro get-channel (channel agent &key (N))
-  (let ((channel `(gethash ,(symbol-name channel) (get-data ,agent))))
-    (acond ((not N)
-	    channel)
-	   ((equal N 1)
-	    `(car ,channel))
-	   (channel
-	    `(subseq ,it 0 (min ,N (length ,it)))))))
+  (setf channel `(gethash ,(symbol-name channel) (get-data ,agent)))
+  (cond ((not N)
+	 channel)
+	((equal N 1)
+	 `(car ,channel))
+	(t
+	 `(subseq ,channel 0 (min ,N (length ,channel))))))
 
 (defmacro with-channels (channels &body body)
   `(let ,(mapcar (lambda (channel)
@@ -170,28 +156,24 @@
 (defmacro with-channel (channel &body body)
   `(with-channels (,channel) ,@body))
   
-(defmacro! add-output% (agent name quota value)
+(defmacro add-output (&key (agent) (name) (quota) (value))
+  "adds an output to agent that sends 'value' through the socket"
   `(add-job
-    (define-job :name ,(symbol-name name) :quota ,quota
+    (define-job :name ,name :quota ,quota
 		:quotaFn (lambda ()
 			   (aif ,value
 				(uni-send-string (get-bsd-stream ,agent)
 						 (format nil "~a=~a~%" ,(symbol-name name) it)))))
     ,agent))
-(defmacro add-output (&key (agent) (name) (quota) (value))
-  `(add-output% ,agent ,name ,quota ,value))
 
-
-(defmacro! add-channel% (agent name quota value)
-  "adds a channel to data who's value is a function of another channel"
+(defmacro add-channel (&key (agent) (name) (quota) (value))
+  "adds channel to agent that evaluates value"
   `(add-job
-    (define-job :name ,(symbol-name name) :quota ,quota
+    (define-job :name ,name :quota ,quota
 		:quotaFn (lambda ()
 			   (aif ,value
 				(push it (get-channel ,name ,agent)))))
     ,agent))
-(defmacro add-channel (&key (agent) (name) (quota) (value))
-  `(add-channel% ,agent ,name ,quota ,value))
 
 (defmacro! print-agent (o!agent)
   "print agent 'agent'"
@@ -279,7 +261,7 @@
    (with-pandoric (bsd-socket bsd-stream) (get-socket display)
      ;just looping through N times for now; eventually, this will be looped until os x signals an exit
      (let ((i 0))
-       (while (and (< (incf i) 50) bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
+       (while (and (< (incf i) 12000) bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
 	 (update-agents)))
      ;telling the os x client to exit
      (uni-send-string bsd-stream (format nil "[QUIT]~%"))
