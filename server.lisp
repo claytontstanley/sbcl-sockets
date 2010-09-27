@@ -14,29 +14,42 @@
 		   ,@(cdr cl1))
 		 (acond ,@(cdr clauses)))))))
 
+(defmacro! square (o!x)
+  `(* ,g!x ,g!x))
+
+(defun linear-regression (xs ys)
+  (let* ((x-bar (mean xs))
+	 (y-bar (mean ys))
+	 (Lxx (reduce #'+ (mapcar (lambda (xi) (square (- xi x-bar))) xs)))
+	 ;(Lyy (reduce #'+ (mapcar (lambda (yi) (square (- yi y-bar))) ys)))
+	 (Lxy (reduce #'+ (mapcar (lambda (xi yi) (* (- xi x-bar) (- yi y-bar)))
+				  xs ys)))
+	 (b (/ Lxy Lxx))
+	 (a (- y-bar (* b x-bar))))
+    ;slope then intercept
+    (values b a)))
+
 (defmacro! trim-data (data N)
   "trims the ends off all channels in the data hash table, so that no channel is > N in length"
   `(loop for ,g!channel being the hash-values of ,data
       do (if (> (length ,g!channel) ,N)
 	     (setf ,g!channel (nbutlast ,g!channel)))))
 
-(defmacro define-job (&key (name) (quota) (QuotaFn) (QuotFn))
+(defmacro define-job (&key (name) (quota 1) (Fn) (active-p 't))
   "discrete event simulator that executes functions at the specified time, 
-   when active, you can pass functions to execute at each iteration (at quot)
-   and after each time the quota is reached (at quota)
+   when active, you can pass functions to execute after each time the quota is reached
    the functioned returned is pandoric, so you can access/change state variables"
     `(let ((quota ,quota)
 	   (quot 0)
 	   (name ',name)
-	   (active t))
-       (plambda () (name quot quota active)
-	 ,(if QuotFn
-	      `(if active (funcall ,QuotFn)))
-	 (incf quot)
-	 (when (eq quot quota)
-	   ,(if QuotaFn
-		`(if active (funcall ,QuotaFn)))
-	   (setf quot 0)))))
+	   (active ,active-p)
+	   (Fn ,Fn))
+       (plambda () (name quot quota active Fn)
+	 (when active
+	   (incf quot)
+	   (when (eq quot quota)
+	     (funcall Fn)
+	     (setf quot 0))))))
 
 (defmacro make-socket (&key (bsd-stream) (bsd-socket))
   "defines a socket that is a pandoric function
@@ -50,7 +63,7 @@
          ;data storing any received messages
 	 (data (make-hash-table :test #'equalp)) 
          ;maximum length of a channel in the data hash table
-	 (N 100)) 
+	 (N 100))
      (plambda () (bsd-stream bsd-socket data N)
        (trim-data data N)
        (let ((line))
@@ -66,11 +79,12 @@
 		  (t
 		   (eval (read-from-string line)))))))))
 
-(defmacro! add-job (o!job to)
+(defmacro! add-job (&key (job) (agent))
   "adds job o!job to pandoric 'to'; errors if already present"
-  `(let ((,g!name (get-pandoric ,g!job 'name)))
-     (assert (not (job-present-p ,g!name ,to)) nil "tried to add job ~a that is already present~%" ,g!name)
-     (with-pandoric (jobs) ',to
+  `(let* ((,g!job ,job)
+	  (,g!name (get-pandoric ,g!job 'name)))
+     (assert (not (job-present-p ,g!name ,agent)) nil "tried to add job ~a that is already present~%" ,g!name)
+     (with-pandoric (jobs) ',agent
        (setf (gethash ,g!name jobs) ,g!job))))
 
 (defmacro! remove-job (o!name from)
@@ -80,10 +94,10 @@
      (with-pandoric (jobs) ',from
        (remhash ,g!name jobs))))
 
-(defmacro! job-present-p (o!name in)
+(defmacro job-present-p (name in)
   "if job o!name is present in pandoric 'in'"
   `(with-pandoric (jobs) ',in
-     (key-present ,g!name jobs)))
+     (key-present ',name jobs)))
 
 (defmacro! activate-job (o!name from)
   "activates job o!name from pandoric 'from'; errors if not present, or present and already active"
@@ -110,6 +124,14 @@
      (with-pandoric (jobs) ',from
        (get-pandoric (gethash ,g!name jobs) 'active))))
 
+(defmacro run-job (name agent)
+  "short-circuits through the quota run-jobs loop, and just executes the job once"
+  `(progn
+     (assert (job-present-p ,name ,agent) nil "tried to run job ~a that is not present~%" ',name)
+     (with-pandoric (jobs) ',agent
+       (with-pandoric (Fn) (gethash ',name jobs)
+	 (funcall Fn)))))
+
 (defmacro define-agent (&key (name) (socket))
   "container to store a collection of jobs (in a hash table)
    defines a pandoric function that will loop through all the jobs and 
@@ -120,10 +142,10 @@
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
      (if socket
-	 (add-job (define-job :name ,name
-		    :quota 1 
-		    :quotaFn socket) 
-		  ,name))
+	 (add-job :agent ,name
+		  :job (define-job :name ,name
+			 :quota 1 
+			 :Fn socket)))
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
 (defmacro get-socket (agent)
@@ -162,22 +184,20 @@
   
 (defmacro add-output (&key (agent) (name) (quota) (value))
   "adds an output to agent that sends 'value' through the socket"
-  `(add-job
-    (define-job :name ,name :quota ,quota
-		:quotaFn (lambda ()
-			   (aif ,value
-				(uni-send-string (get-bsd-stream ,agent)
-						 (format nil "~a=~a~%" ,(symbol-name name) it)))))
-    ,agent))
+  `(add-job :agent ,agent
+	    :job (define-job :name ,name :quota ,quota
+			     :Fn (lambda ()
+				   (aif ,value
+					(uni-send-string (get-bsd-stream ,agent)
+							 (format nil "~a=~a~%" ,(symbol-name name) it)))))))
 
 (defmacro add-channel (&key (agent) (name) (quota) (value))
   "adds channel to agent that evaluates value"
-  `(add-job
-    (define-job :name ,name :quota ,quota
-		:quotaFn (lambda ()
-			   (aif ,value
-				(push it (get-channel ,name ,agent)))))
-    ,agent))
+  `(add-job :agent ,agent
+	    :job (define-job :name ,name :quota ,quota
+			     :Fn (lambda ()
+				   (aif ,value
+					(push it (get-channel ,name ,agent)))))))
 
 (defmacro! print-agent (o!agent)
   "print agent 'agent'"
@@ -203,6 +223,9 @@
 (let ((agents))
   (defpun agents () (agents)
     ()))
+
+(defun compile-server ()
+  (compile-file "server.lisp" :output-file "server.fasl"))
      
 (defun run-server ()
   "top-level function that runs the lisp backend server"
@@ -216,7 +239,9 @@
 			    (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ strem
 			    (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
 			    (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
-			    ))))
+			    ))
+			 ))
+
   
   ;agent in charge of all jobs concerning the display (that is, the lisp->os x bridge)
   (multiple-value-bind (bsd-stream bsd-socket) (uni-prepare-socket "127.0.0.1" 9557)
@@ -225,38 +250,50 @@
 			   :bsd-socket bsd-socket)))
 
   ;;;define the jobs for the DAQ agent
+
   
-  ;for kicks, lets do a linear transformation on one of the channels in the DAQ
+
+  ;add a calibrated rpm channel to the daq; uses the rpm-intercept and rpm-slope daq channels to perform
+  ;the linear transformation from the rpm-raw signal
+  ;these rpm-intercept and rpm-slope channels are updated (recalibrated) every time the rpm-regression
+  ;job is run
   (add-channel :agent DAQ
 	       :name RPM
-	       :value (with-channel (rpm-raw DAQ :N 1)
-			(+ rpm-raw (* rpm-raw 100) 5))
+	       :value (with-channels ((rpm-raw DAQ :N 1) (rpm-intercept DAQ :N 1) (rpm-slope DAQ :N 1))
+			(+ (aif rpm-intercept it 0) (* (aif rpm-slope it 1) rpm-raw)))
 	       :quota 4)
 
-  ;this pattern can take care of calibration signals sent from OSX 
-  (add-channel :agent DAQ
-	       :name RPM-Special
-	       :value (with-channels ((rpm-raw DAQ :N 1) (rpm-xfer-m display :N 30))
-			 (if (and rpm-raw rpm-xfer-m) (* rpm-raw (mean rpm-xfer-m))))
-	       :quota 2)
 
   ;;;define the jobs for the display agent
 
-  ;then initialize any OSX outgoings
+  ;add a job that the display agent can run; the job pushes an updated slope and intercept on the
+  ;daq slope/intercept channels
+  (add-job :agent display
+	   :job (define-job :name RPM-regression :active-p nil
+			    :Fn (lambda ()
+				  (with-channels ((rpm-measured display :N 30) (rpm-displayed display :N 30)
+						  (rpm-slope DAQ :N 1) (rpm-intercept DAQ :N 1))
+				    ;we need to convert the rpm-displayed back to raw data scale
+				    (if (and rpm-intercept rpm-slope)
+					(setf rpm-displayed (mapcar (lambda (y) (/ (- y rpm-intercept) rpm-slope)) rpm-displayed)))
+				    ;then grab the updated slope and intercept, and push them on to the slope/intercept daq channel
+				    (when (> (length rpm-displayed) 5)
+				      (multiple-value-setq (rpm-slope rpm-intercept) (linear-regression rpm-measured rpm-displayed))
+				      (push rpm-slope (get-channel rpm-slope DAQ))
+				      (push rpm-intercept (get-channel rpm-intercept DAQ)))))))
+  
+  ;send the calibrated rpm signal to the display
   (add-output :agent display 
 	      :name RPM
 	      :value (get-channel RPM DAQ :N 1)
 	      :quota 1)
   
+  ;send the raw rpm signal to the display as well
   (add-output :agent display
 	      :name RPM-Raw
 	      :value (get-channel RPM-Raw DAQ :N 1)
 	      :quota 1)
 
-  (add-output :agent display
-	      :name RPM-Special
-	      :value (get-channel RPM-Special DAQ :N 1)
-	      :quota 1)
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
   (print-agents) 
@@ -268,7 +305,7 @@
    (with-pandoric (bsd-socket bsd-stream) (get-socket display)
      ;just looping through N times for now; eventually, this will be looped until os x signals an exit
      (let ((i 0))
-       (while (and (< (incf i) 12000) bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
+       (while (and (< (incf i) 120) bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
 	 (update-agents)))
      ;telling the os x client to exit
      (uni-send-string bsd-stream (format nil "[QUIT]~%"))
