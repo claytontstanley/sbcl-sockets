@@ -1,18 +1,16 @@
-(deftest test-define-manager ()
+(deftest test-define-job ()
   (macrolet ((test-lambdas (quota name)
 	       `(let* ((quotaStr (format nil "atQuota~%"))
-		       (quotStr (format nil "atQuot~%"))
 		       (quotaFun (lambda () (format t quotaStr)))
-		       (quotFun (lambda () (format t quotStr)))
-		       (fun (define-manager ,name ,quota quotaFun quotFun)))
-		  (with-pandoric (quot quota) fun
-		      (check (equal quota ,quota)))
+		       (fun (define-job :name ,name :quota ,quota :Fn quotaFun)))
+		  (with-pandoric (quota) fun
+		    (check (equal quota ,quota)))
 		  (check
 		   (string-equal
 		    (with-output-to-string (*standard-output*)
-		      (dotimes (i ,quota) 
+		      (dotimes (i (* ,quota 10)) 
 			(funcall fun)))
-		    (fast-concatenate (format nil "~{~a~}" (make-list ,quota :initial-element quotStr)) quotaStr)))
+		    (format nil "~{~a~}" (make-list 10 :initial-element quotaStr))))
 		  (with-pandoric (quot) fun
 		    (dotimes (i ,quota)
 		      (check (equal quot i))
@@ -22,41 +20,42 @@
 		     (equal quot 0)
 		     (equal quota ,quota)
 		     active
-		     (string-equal name ,name))))))
-    (test-lambdas 1 "hello")
-    (test-lambdas 2 "world")
-    (test-lambdas 40 "with a space")))
+		     (equal name ',name))))))
+    (test-lambdas 1 hello)
+    (test-lambdas 2 world)
+    (test-lambdas 40 with-space)))
 
-(define-managers the-managers)     
-(defmacro get-managers (names strings)
+(define-agent :name the-managers)
+
+(defmacro get-agent (names strings)
   `(progn
-     (define-managers the-managers)
+     (define-agent :name the-managers)
      ,@(mapcar (lambda (name string)
-		 `(add-manager (define-manager ,name 1 (lambda () (format t "~a~%" ,string))) the-managers))
-	       names strings)))
+		 `(add-job :agent the-managers :job (define-job :name ,name :Fn (lambda () (format t "~a~%" ,string)))))
+		 names strings)))
 
-(deftest test-define-managers ()
+(deftest test-define-agent ()
   (macrolet ((test-definition (names strings)
 	       `(progn
-		  (get-managers ,names ,strings)
+		  (get-agent ,names ,strings)
 		  (check
 		   (string-equal
 		    (with-output-to-string (*standard-output*)
 		      (the-managers))
 		    (format nil "~{~a~%~}" ',strings))))))
-    (test-definition ("name" "name2") ("hello" "hello2"))
-    (test-definition ("name") ("hello2"))
-    (test-definition ("name1" "name2" "name3") ("output1" "output2" "output3"))
+    (test-definition (name name2) ("hello" "hello2"))
+    (test-definition (name) ("hello2"))
+    (test-definition (name1 name2 name3) ("output1" "output2" "output3"))
     (test-definition nil nil)))
 
-(deftest test-print-managers ()
+(deftest test-print-agent ()
   (macrolet ((test-single (names strings)
 	       `(progn
-		  (get-managers ,names ,strings)
+		  (get-agent ,names ,strings)
 		  (check
 		   (string-equal
 		    (with-output-to-string (*standard-output*)
-		      (print-managers the-managers))
+		      (print-agent 'the-managers))
 		    (format nil "~{from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%~}" 
 			    (flatten 
 			     (mapcar (lambda (a b c d e) (list a b c d e))
@@ -65,51 +64,51 @@
 				     (make-list 2 :initial-element t)
 				     (make-list 2 :initial-element 0)
 				     (make-list 2 :initial-element 1)))))))))
-    (test-single ("name1" "name2") ("output1" "output2"))
-    (test-single ("name1") ("output"))
+    (test-single (name1 name2) ("output1" "output2"))
+    (test-single (name1) ("output"))
     (test-single () ())))
 
-(deftest test-add-manager ()
+(deftest test-add-job ()
   (macrolet ((check-added (names strings)
 	       `(progn
-		  (get-managers ,names ,strings)
-		  ,@(mapcar (lambda (name) `(check (manager-present-p ,name the-managers))) names)))
+		  (get-agent ,names ,strings)
+		  ,@(mapcar (lambda (name) `(check (job-present-p ,name the-managers))) names)))
 	     (check-for-error (names strings should-error)
 	       `(check
 		 (equal ,should-error
 			(handler-case
 			    (progn 
-			      (get-managers ,names ,strings)
+			      (get-agent ,names ,strings)
 			      nil)
 			  (error (condition) (declare (ignore condition)) t))))))
-    (check-added ("name") ("output"))
+    (check-added (test) ("output"))
     (check-added () ())
-    (check-added ("name2" "name") ("output2" "output"))
-    (check-for-error ("name" "name") ("output" "output2") t)
-    (check-for-error ("name" "name2") ("output" "output") nil)
-    (check-for-error ("name" "name2") ("output" "output2") nil)))
+    (check-added (name2 name) ("output2" "output"))
+    (check-for-error (name name) ("output" "output2") t)
+    (check-for-error (name name2) ("output" "output") nil)
+    (check-for-error (name name2) ("output" "output2") nil)))
 
-(deftest test-remove-manager ()
+(deftest test-remove-job ()
   (macrolet ((check-removed (remove names)
 	       `(progn
-		  (get-managers ,names ,names)
-		  (remove-manager ,remove the-managers)
-		  (check (not (manager-present-p ,remove the-managers)))))
+		  (get-agent ,names ,(mapcar #'symbol-name names))
+		  (remove-job ,remove the-managers)
+		  (check (not (job-present-p ,remove the-managers)))))
 	     (check-for-error (remove names should-error)
 	       `(progn
-		  (get-managers ,names ,names)
+		  (get-agent ,names ,names)
 		  (check
 		   (equal ,should-error
 			  (handler-case
 			      (progn
-				(remove-manager ,remove the-managers)
+				(remove-job ,remove the-managers)
 				nil)
 			    (error (condition) (declare (ignore condition)) t)))))))
-    (check-removed "name" ("name" "name2"))
-    (check-removed "name2" ("name2"))
-    (check-for-error "name" () t)
-    (check-for-error "name2" ("name") t)
-    (check-for-error "name3" ("name1" "name3") nil)))
+    (check-removed name (name name2))
+    (check-removed name2 (name2))
+    (check-for-error name () t)
+    (check-for-error name2 (name) t)
+    (check-for-error name3 (name1 name3) nil)))
 
 
 
@@ -120,10 +119,10 @@
 (defun test-server ()
   (let ((result
 	 (runtests 
-	  (test-define-manager)
-	  (test-define-managers)
-	  (test-print-managers)
-	  (test-add-manager)
-	  (test-remove-manager)
+	  (test-define-job)
+	  (test-define-agent)
+	  (test-print-agent)
+	  (test-add-job)
+	  (test-remove-job)
 	  )))
     (format t "~%overall: ~:[FAIL~;pass~]~%" result)))

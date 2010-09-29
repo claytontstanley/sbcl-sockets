@@ -79,53 +79,54 @@
 		  (t
 		   (eval (read-from-string line)))))))))
 
-(defmacro! add-job (&key (job) (agent))
-  "adds job o!job to pandoric 'to'; errors if already present"
-  `(let* ((,g!job ,job)
-	  (,g!name (get-pandoric ,g!job 'name)))
-     (assert (not (job-present-p ,g!name ,agent)) nil "tried to add job ~a that is already present~%" ,g!name)
-     (with-pandoric (jobs) ',agent
-       (setf (gethash ,g!name jobs) ,g!job))))
+(defmacro add-job (&key (job) (agent))
+  "adds job to agent; errors if already present"
+  (let ((name (guard (second (member :name (flatten job)))
+		     (assert (car it) nil "job form ~a does not have a name~%" job))))
+    `(progn
+       (assert (not (job-present-p ,name ,agent)) nil "tried to add job ~a that is already present~%" ',name)
+       (with-pandoric (jobs) ',agent
+	 (setf (gethash ',name jobs) ,job)))))
 
-(defmacro! remove-job (o!name from)
-  "removes job o!name from pandoric 'from'; errors if not already present"
+(defmacro remove-job (name agent)
+  "removes job from agent; errors if not already present"
   `(progn
-     (assert (job-present-p ,g!name ,from) nil "tried to remove job ~a that is not present~%" ,g!name)
-     (with-pandoric (jobs) ',from
-       (remhash ,g!name jobs))))
+     (assert (job-present-p ,name ,agent) nil "tried to remove job ~a that is not present~%" ',name)
+     (with-pandoric (jobs) ',agent
+       (remhash ',name jobs))))
 
-(defmacro job-present-p (name in)
-  "if job o!name is present in pandoric 'in'"
-  `(with-pandoric (jobs) ',in
+(defmacro job-present-p (name agent)
+  "if job is present in agent"
+  `(with-pandoric (jobs) ',agent
      (key-present ',name jobs)))
 
-(defmacro! activate-job (o!name from)
-  "activates job o!name from pandoric 'from'; errors if not present, or present and already active"
+(defmacro activate-job (name agent)
+  "activates job from agent; errors if not present, or present and already active"
   `(progn
-     (assert (job-present-p ,g!name ,from) nil "tried to activate job ~a that is not present" ,g!name)
-     (with-pandoric (jobs) ',from
-       (with-pandoric (active) (gethash ,g!name jobs)
-	 (assert (not active) nil "tried to activate job ~a that is already activated~%" ,g!name)
+     (assert (job-present-p ,name ,agent) nil "tried to activate job ~a that is not present" ',name)
+     (with-pandoric (jobs) ',agent
+       (with-pandoric (active) (gethash ',name jobs)
+	 (assert (not active) nil "tried to activate job ~a that is already activated~%" ',name)
 	 (setf active t)))))
 
-(defmacro! deactivate-job (o!name from)
-  "deactivates job o!name from pandoric 'from'; errors if not present, or present and not already active"
+(defmacro deactivate-job (name agent)
+  "deactivates job from agent; errors if not present, or present and not already active"
   `(progn
-     (assert (job-present-p ,g!name ,from) nil "tried to deactivate job ~a that is not present" ,g!name)
-     (with-pandoric (jobs) ',from
-       (with-pandoric (active) (gethash ,g!name jobs)
-	 (assert active nil "tried to deactivate job ~a that is already deactivated~%" ,g!name)
+     (assert (job-present-p ,name ,agent) nil "tried to deactivate job ~a that is not present" ',name)
+     (with-pandoric (jobs) ',agent
+       (with-pandoric (active) (gethash ',name jobs)
+	 (assert active nil "tried to deactivate job ~a that is already deactivated~%" ',name)
 	 (setf active nil)))))
 
-(defmacro! job-active-p (o!name from)
-  "returns t/nil if job o!name from pandoric 'from' is active; errors if not present"
+(defmacro job-active-p (name agent)
+  "returns t/nil if job from agent is active; errors if not present"
   `(progn
-     (assert (job-present-p ,g!name ,from) nil "tried to check active flag for job ~a that is not present" ,g!name)
-     (with-pandoric (jobs) ',from
-       (get-pandoric (gethash ,g!name jobs) 'active))))
+     (assert (job-present-p ,name ,agent) nil "tried to check active flag for job ~a that is not present" ',name)
+     (with-pandoric (jobs) ',agent
+       (get-pandoric (gethash ',name jobs) 'active))))
 
 (defmacro run-job (name agent)
-  "short-circuits through the quota run-jobs loop, and just executes the job once"
+  "short circuits through the quota run-jobs loop, and just executes the job once"
   `(progn
      (assert (job-present-p ,name ,agent) nil "tried to run job ~a that is not present~%" ',name)
      (with-pandoric (jobs) ',agent
@@ -224,6 +225,33 @@
   (defpun agents () (agents)
     ()))
 
+(defmacro add-regression (&key (agent) (name) (slope-channel) (intercept-channel) (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel))
+  (let ((displayed (car displayed-channel))
+	(measured (car measured-channel))
+	(slope (car slope-channel))
+	(intercept (car intercept-channel))
+	(raw (car raw-channel)))
+    `(progn
+       ;add the calibrated channel
+       (add-channel :agent ,(second calibrated-channel)
+		    :name ,(first calibrated-channel)
+		    :value (with-channels ((,@raw-channel :N 1) (,@intercept-channel :N 1) (,@slope-channel :N 1))
+			     (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw))))
+       ;add the job that calibrates the calibrated channel
+       (add-job :agent ,agent
+		:job (define-job :name ,name :active-p nil
+				 :Fn (lambda ()
+				       (with-channels ((,@displayed-channel :N 30) (,@measured-channel :N 30)
+						       (,@slope-channel :N 1) (,@intercept-channel :N 1))
+				         ;we need to convert the displayed back to raw data scale
+					 (if (and ,intercept ,slope)
+					     (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
+				         ;then grab the updated slope and intercept, and push them on to the slope/intercept daq channel
+					 (when (> (length ,displayed) 5)
+					   (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
+					   (push ,slope (get-channel ,@slope-channel))
+					   (push ,intercept (get-channel ,@intercept-channel))))))))))
+       
 (defun compile-server ()
   (compile-file "server.lisp" :output-file "server.fasl"))
      
@@ -239,8 +267,7 @@
 			    (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ strem
 			    (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
 			    (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
-			    ))
-			 ))
+			    ))))
 
   
   ;agent in charge of all jobs concerning the display (that is, the lisp->os x bridge)
@@ -249,38 +276,16 @@
       :socket (make-socket :bsd-stream bsd-stream
 			   :bsd-socket bsd-socket)))
 
-  ;;;define the jobs for the DAQ agent
-
-  
-
-  ;add a calibrated rpm channel to the daq; uses the rpm-intercept and rpm-slope daq channels to perform
-  ;the linear transformation from the rpm-raw signal
-  ;these rpm-intercept and rpm-slope channels are updated (recalibrated) every time the rpm-regression
-  ;job is run
-  (add-channel :agent DAQ
-	       :name RPM
-	       :value (with-channels ((rpm-raw DAQ :N 1) (rpm-intercept DAQ :N 1) (rpm-slope DAQ :N 1))
-			(+ (aif rpm-intercept it 0) (* (aif rpm-slope it 1) rpm-raw)))
-	       :quota 4)
-
-
-  ;;;define the jobs for the display agent
-
   ;add a job that the display agent can run; the job pushes an updated slope and intercept on the
   ;daq slope/intercept channels
-  (add-job :agent display
-	   :job (define-job :name RPM-regression :active-p nil
-			    :Fn (lambda ()
-				  (with-channels ((rpm-measured display :N 30) (rpm-displayed display :N 30)
-						  (rpm-slope DAQ :N 1) (rpm-intercept DAQ :N 1))
-				    ;we need to convert the rpm-displayed back to raw data scale
-				    (if (and rpm-intercept rpm-slope)
-					(setf rpm-displayed (mapcar (lambda (y) (/ (- y rpm-intercept) rpm-slope)) rpm-displayed)))
-				    ;then grab the updated slope and intercept, and push them on to the slope/intercept daq channel
-				    (when (> (length rpm-displayed) 5)
-				      (multiple-value-setq (rpm-slope rpm-intercept) (linear-regression rpm-measured rpm-displayed))
-				      (push rpm-slope (get-channel rpm-slope DAQ))
-				      (push rpm-intercept (get-channel rpm-intercept DAQ)))))))
+  (add-regression :agent display
+		  :name RPM-regression
+		  :slope-channel (rpm-slope DAQ)
+		  :intercept-channel (rpm-intercept DAQ)
+		  :measured-channel (rpm-measured display)
+		  :displayed-channel (rpm-displayed display)
+		  :calibrated-channel (RPM DAQ)
+		  :raw-channel (RPM-raw DAQ))
   
   ;send the calibrated rpm signal to the display
   (add-output :agent display 
