@@ -68,6 +68,13 @@
     (test-single (name1) ("output"))
     (test-single () ())))
 
+(defmacro! errors-p (form)
+  `(handler-case
+       (progn
+	 ,form
+	 nil)
+     (error (,g!condition) (declare (ignore ,g!condition)) t)))
+
 (deftest test-add-job ()
   (macrolet ((check-added (names strings)
 	       `(progn
@@ -76,11 +83,7 @@
 	     (check-for-error (names strings should-error)
 	       `(check
 		 (equal ,should-error
-			(handler-case
-			    (progn 
-			      (get-agent ,names ,strings)
-			      nil)
-			  (error (condition) (declare (ignore condition)) t))))))
+			(errors-p (get-agent ,names ,strings))))))
     (check-added (test) ("output"))
     (check-added () ())
     (check-added (name2 name) ("output2" "output"))
@@ -99,11 +102,7 @@
 		  (get-agent ,names ,names)
 		  (check
 		   (equal ,should-error
-			  (handler-case
-			      (progn
-				(remove-job ,remove the-managers)
-				nil)
-			    (error (condition) (declare (ignore condition)) t)))))))
+			  (errors-p (remove-job ,remove the-managers)))))))
     (check-removed name (name name2))
     (check-removed name2 (name2))
     (check-for-error name () t)

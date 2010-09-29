@@ -35,7 +35,7 @@
       do (if (> (length ,g!channel) ,N)
 	     (setf ,g!channel (nbutlast ,g!channel)))))
 
-(defmacro define-job (&key (name) (quota 1) (Fn) (active-p 't))
+(defmacro define-job (&key (name) (Fn) (active-p t) (quota 1))
   "discrete event simulator that executes functions at the specified time, 
    when active, you can pass functions to execute after each time the quota is reached
    the functioned returned is pandoric, so you can access/change state variables"
@@ -149,6 +149,31 @@
 			 :Fn socket)))
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
+(defmacro! print-agent (o!agent)
+  "print agent 'agent'"
+  `(with-pandoric (jobs) (symbol-function ,g!agent)
+     (loop for job being the hash-values of jobs
+	do (with-pandoric (name active quot quota) job
+	     (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" ,g!agent name active quot quota)))))
+
+(defmacro! print-agents ()
+  "prints all of the agents that have been created"
+  `(dolist (,g!agent (get-pandoric 'agents 'agents))
+     (print-agent ,g!agent)))
+
+(defmacro update-agent (agent)
+  "updates agent 'agent'"
+  `(funcall (symbol-function ,agent)))
+
+(defmacro! update-agents ()
+  "updates all of the agents that have been created"
+  `(dolist (,g!agent (get-pandoric #'agents 'agents))
+     (update-agent ,g!agent)))
+
+(let ((agents))
+  (defpun agents () (agents)
+    ()))
+
 (defmacro get-socket (agent)
   "returns the agent's socket"
   `(get-pandoric ',agent 'socket))
@@ -186,7 +211,7 @@
 (defmacro add-output (&key (agent) (name) (quota) (value))
   "adds an output to agent that sends 'value' through the socket"
   `(add-job :agent ,agent
-	    :job (define-job :name ,name :quota ,quota
+	    :job (define-job :name ,name ,@(aif quota (list :quota it))
 			     :Fn (lambda ()
 				   (aif ,value
 					(uni-send-string (get-bsd-stream ,agent)
@@ -195,37 +220,12 @@
 (defmacro add-channel (&key (agent) (name) (quota) (value))
   "adds channel to agent that evaluates value"
   `(add-job :agent ,agent
-	    :job (define-job :name ,name :quota ,quota
+	    :job (define-job :name ,name ,@(aif quota (list :quota it))
 			     :Fn (lambda ()
 				   (aif ,value
 					(push it (get-channel ,name ,agent)))))))
 
-(defmacro! print-agent (o!agent)
-  "print agent 'agent'"
-  `(with-pandoric (jobs) (symbol-function ,g!agent)
-     (loop for job being the hash-values of jobs
-	do (with-pandoric (name active quot quota) job
-	     (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" ,g!agent name active quot quota)))))
-
-(defmacro! print-agents ()
-  "prints all of the agents that have been created"
-  `(dolist (,g!agent (get-pandoric 'agents 'agents))
-     (print-agent ,g!agent)))
-
-(defmacro update-agent (agent)
-  "updates agent 'agent'"
-  `(funcall (symbol-function ,agent)))
-
-(defmacro! update-agents ()
-  "updates all of the agents that have been created"
-  `(dolist (,g!agent (get-pandoric #'agents 'agents))
-     (update-agent ,g!agent)))
-
-(let ((agents))
-  (defpun agents () (agents)
-    ()))
-
-(defmacro add-calibration (&key (agent) (name) (slope-channel) (intercept-channel) 
+(defmacro add-calibration (&key (agent) (name) (quota) (slope-channel) (intercept-channel) 
 			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel) (N 30))
   "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and displayed channels"
   (let* (;if slope-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
@@ -237,11 +237,11 @@
 	 (slope (car slope-channel))
 	 (intercept (car intercept-channel))
 	 (raw (car raw-channel)))
-    (format t "slope ~a~%intercept ~a~%" slope-channel intercept-channel)
     `(progn
        ;add the calibrated channel
        (add-channel :agent ,(second calibrated-channel)
 		    :name ,(first calibrated-channel)
+		    :quota ,quota
 		    :value (with-channels ((,@raw-channel :N 1) (,@intercept-channel :N 1) (,@slope-channel :N 1))
 			     (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw))))
        ;add the job that calibrates the calibrated channel
@@ -284,25 +284,21 @@
 
   ;add a job that the display agent can run; the job pushes a calibrated signal on the RPM channel for the DAQ
   (add-calibration :agent display
-		  :name RPM-regression
-		  :measured-channel (rpm-measured display)
-		  :displayed-channel (rpm-displayed display)
-		  :calibrated-channel (RPM DAQ)
-		  :raw-channel (RPM-raw DAQ)
-		  :N 10)
-  
+		   :name RPM-regression
+		   :measured-channel (rpm-measured display)
+		   :displayed-channel (rpm-displayed display)
+		   :calibrated-channel (RPM DAQ)
+		   :raw-channel (RPM-raw DAQ))
+    
   ;send the calibrated rpm signal to the display
   (add-output :agent display 
 	      :name RPM
-	      :value (get-channel RPM DAQ :N 1)
-	      :quota 1)
+	      :value (get-channel RPM DAQ :N 1))
   
   ;send the raw rpm signal to the display as well
   (add-output :agent display
 	      :name RPM-Raw
-	      :value (get-channel RPM-Raw DAQ :N 1)
-	      :quota 1)
-
+	      :value (get-channel RPM-Raw DAQ :N 1))
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
   (print-agents) 
