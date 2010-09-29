@@ -225,12 +225,19 @@
   (defpun agents () (agents)
     ()))
 
-(defmacro add-regression (&key (agent) (name) (slope-channel) (intercept-channel) (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel))
-  (let ((displayed (car displayed-channel))
-	(measured (car measured-channel))
-	(slope (car slope-channel))
-	(intercept (car intercept-channel))
-	(raw (car raw-channel)))
+(defmacro add-calibration (&key (agent) (name) (slope-channel) (intercept-channel) 
+			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel) (N 30))
+  "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and displayed channels"
+  (let* (;if slope-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
+	 (slope-channel (aif slope-channel it (list (gensym "SLOPE") (second raw-channel))))
+	 ;if intercept-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
+	 (intercept-channel (aif intercept-channel it (list (gensym "INTERCEPT") (second raw-channel))))
+	 (displayed (car displayed-channel))
+	 (measured (car measured-channel))
+	 (slope (car slope-channel))
+	 (intercept (car intercept-channel))
+	 (raw (car raw-channel)))
+    (format t "slope ~a~%intercept ~a~%" slope-channel intercept-channel)
     `(progn
        ;add the calibrated channel
        (add-channel :agent ,(second calibrated-channel)
@@ -241,12 +248,12 @@
        (add-job :agent ,agent
 		:job (define-job :name ,name :active-p nil
 				 :Fn (lambda ()
-				       (with-channels ((,@displayed-channel :N 30) (,@measured-channel :N 30)
+				       (with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
 						       (,@slope-channel :N 1) (,@intercept-channel :N 1))
-				         ;we need to convert the displayed back to raw data scale
+				         ;we need to convert the displayed channel back to raw data scale
 					 (if (and ,intercept ,slope)
 					     (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
-				         ;then grab the updated slope and intercept, and push them on to the slope/intercept daq channel
+				         ;then grab the updated slope and intercept, and push them on to the slope/intercept channel
 					 (when (> (length ,displayed) 5)
 					   (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
 					   (push ,slope (get-channel ,@slope-channel))
@@ -257,7 +264,6 @@
      
 (defun run-server ()
   "top-level function that runs the lisp backend server"
-
 
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
   (define-agent :name DAQ 
@@ -276,16 +282,14 @@
       :socket (make-socket :bsd-stream bsd-stream
 			   :bsd-socket bsd-socket)))
 
-  ;add a job that the display agent can run; the job pushes an updated slope and intercept on the
-  ;daq slope/intercept channels
-  (add-regression :agent display
+  ;add a job that the display agent can run; the job pushes a calibrated signal on the RPM channel for the DAQ
+  (add-calibration :agent display
 		  :name RPM-regression
-		  :slope-channel (rpm-slope DAQ)
-		  :intercept-channel (rpm-intercept DAQ)
 		  :measured-channel (rpm-measured display)
 		  :displayed-channel (rpm-displayed display)
 		  :calibrated-channel (RPM DAQ)
-		  :raw-channel (RPM-raw DAQ))
+		  :raw-channel (RPM-raw DAQ)
+		  :N 10)
   
   ;send the calibrated rpm signal to the display
   (add-output :agent display 
