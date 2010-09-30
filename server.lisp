@@ -61,7 +61,9 @@
 	 (bsd-stream ,bsd-stream)
 	 (bsd-socket ,bsd-socket)
          ;data storing any received messages
-	 (data (make-hash-table :test #'equalp)) 
+	 (data (make-hash-table :test #'equalp))
+	 ;data storing any triggered events
+	 (events (make-hash-table :test #'equalp))
          ;maximum length of a channel in the data hash table
 	 (N 100))
      (plambda () (bsd-stream bsd-socket data N)
@@ -149,26 +151,34 @@
 			 :Fn socket)))
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
-(defmacro! print-agent (o!agent)
-  "print agent 'agent'"
-  `(with-pandoric (jobs) (symbol-function ,g!agent)
-     (loop for job being the hash-values of jobs
-	do (with-pandoric (name active quot quota) job
-	     (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" ,g!agent name active quot quota)))))
+;defining function that prints an agent
+(let ((fun (lambda (agent)
+	     (with-pandoric (jobs) (symbol-function agent)
+	       (loop for job being the hash-values of jobs
+		  do (with-pandoric (name active quot quota) job
+		       (format t "from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%" agent name active quot quota)))))))
 
-(defmacro! print-agents ()
-  "prints all of the agents that have been created"
-  `(dolist (,g!agent (get-pandoric 'agents 'agents))
-     (print-agent ,g!agent)))
+  (defmacro print-agent (agent)
+    "prints agent"
+    `(funcall ,fun ',agent))
 
-(defmacro update-agent (agent)
-  "updates agent 'agent'"
-  `(funcall (symbol-function ,agent)))
+  (defmacro! print-agents ()
+    "prints all of the agents that have been created"
+    `(dolist (,g!agent (get-pandoric 'agents 'agents))
+       (funcall ,fun ,g!agent))))
 
-(defmacro! update-agents ()
-  "updates all of the agents that have been created"
-  `(dolist (,g!agent (get-pandoric #'agents 'agents))
-     (update-agent ,g!agent)))
+;defining function that updates an agent
+(let ((fun (lambda (agent)
+	     (funcall (symbol-function agent)))))
+
+  (defmacro update-agent (agent)
+    "updates agent 'agent'"
+    `(funcall ,fun ',agent))
+
+  (defmacro! update-agents ()
+    "updates all of the agents that have been created"
+    `(dolist (,g!agent (get-pandoric #'agents 'agents))
+       (funcall ,fun ,g!agent))))
 
 (let ((agents))
   (defpun agents () (agents)
@@ -224,6 +234,9 @@
 			     :Fn (lambda ()
 				   (aif ,value
 					(push it (get-channel ,name ,agent)))))))
+
+;this is a cool idea
+;(defmacro add-event (&key (trigger-channel) (Fn))
 
 (defmacro add-calibration (&key (agent) (name) (quota) (slope-channel) (intercept-channel) 
 			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel) (N 30))
