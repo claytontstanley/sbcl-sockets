@@ -66,7 +66,7 @@
 	 (events (make-hash-table :test #'equalp))
          ;maximum length of a channel in the data hash table
 	 (N 100))
-     (plambda () (bsd-stream bsd-socket data N)
+     (plambda () (bsd-stream bsd-socket data N events)
        (trim-data data N)
        (let ((line))
 	 ;update all of the raw data
@@ -77,7 +77,10 @@
 		   (if bsd-stream (sb-bsd-sockets::close bsd-stream))
 		   (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket)))
 		  ((line2element line)
-		   (push (eval (read-from-string (cdr it))) (gethash (car it) data)))
+		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
+		   (dolist (event (gethash (car it) events))
+		     (format t "~a~%" event)
+		     (funcall event)))
 		  (t
 		   (eval (read-from-string line)))))))))
 
@@ -196,15 +199,22 @@
   "returns the data hash table inside the agent's socket"
   `(get-pandoric (get-socket ,agent) 'data))
 
-(defmacro get-channel (channel agent &key (N))
-  "returns a channel (or subset of the channel) in the data hash table inside the agent's socket"
-  (setf channel `(gethash ,(symbol-name channel) (get-data ,agent)))
+(defmacro get-events (agent)
+  "returns the events hash table inside the agent's socket"
+  `(get-pandoric (get-socket ,agent) 'events))
+
+(defmacro get-channel (channel agent &key (N) (from `get-data))
+  "returns a channel (or subset of the channel) in the data/event hash table inside the agent's socket"
+  (setf channel `(gethash ,(symbol-name channel) (,from ,agent)))
   (cond ((not N)
 	 channel)
 	((equal N 1)
 	 `(car ,channel))
 	(t
 	 `(subseq ,channel 0 (min ,N (length ,channel))))))
+
+(defmacro add-event (&key (trigger-channel) (Fn))
+  `(push ,Fn (get-channel ,@trigger-channel :from get-events)))
 
 ;TODO; can you allow 'write' access as well? that would be pretty sweet
 (defmacro with-channels (channels &body body)
@@ -217,6 +227,11 @@
 (defmacro with-channel (channel &body body)
   "same as with-channels, but use when you only want to access a single channel"
   `(with-channels (,channel) ,@body))
+
+(defmacro send-output (agent key val)
+  "sends key=val~% to agent's stream"
+  `(uni-send-string (get-bsd-stream ,agent)
+		    (format nil "~a=~a~%" ,(symbol-name key) ,val)))
   
 (defmacro add-output (&key (agent) (name) (quota) (value))
   "adds an output to agent that sends 'value' through the socket"
@@ -224,8 +239,15 @@
 	    :job (define-job :name ,name ,@(aif quota (list :quota it))
 			     :Fn (lambda ()
 				   (aif ,value
-					(uni-send-string (get-bsd-stream ,agent)
-							 (format nil "~a=~a~%" ,(symbol-name name) it)))))))
+					(send-output ,agent ,name it))))))
+
+(defmacro add-output-event (&key (agent) (name) (trigger-channel) (value))
+  (if (not name) (setf name (car trigger-channel)))
+  (if (not value) (setf value `(get-channel ,@trigger-channel :N 1)))
+  `(add-event :trigger-channel ,trigger-channel
+	      :Fn (lambda ()
+		    (aif ,value
+			 (send-output ,agent ,name it)))))
 
 (defmacro add-channel (&key (agent) (name) (quota) (value))
   "adds channel to agent that evaluates value"
@@ -235,10 +257,7 @@
 				   (aif ,value
 					(push it (get-channel ,name ,agent)))))))
 
-;this is a cool idea
-;(defmacro add-event (&key (trigger-channel) (Fn))
-
-(defmacro add-calibration (&key (agent) (name) (quota) (slope-channel) (intercept-channel) 
+(defmacro add-calibration (&key (agent) (name) (slope-channel) (intercept-channel) 
 			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel) (N 30))
   "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and displayed channels"
   (let* (;if slope-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
@@ -251,12 +270,12 @@
 	 (intercept (car intercept-channel))
 	 (raw (car raw-channel)))
     `(progn
-       ;add the calibrated channel
-       (add-channel :agent ,(second calibrated-channel)
-		    :name ,(first calibrated-channel)
-		    :quota ,quota
-		    :value (with-channels ((,@raw-channel :N 1) (,@intercept-channel :N 1) (,@slope-channel :N 1))
-			     (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw))))
+       ;add an event that; whenever the raw-channel receives a value, the calibrated value from the raw-channel will be pushed
+       ;on the calibrated-channel
+       (add-event :trigger-channel ,raw-channel
+		  :Fn (lambda () (with-channels ((,@raw-channel :N 1) (,@intercept-channel :N 1) (,@slope-channel :N 1))
+				   (aif (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw))
+					(push it (get-channel ,@calibrated-channel))))))
        ;add the job that calibrates the calibrated channel
        (add-job :agent ,agent
 		:job (define-job :name ,name :active-p nil
@@ -270,7 +289,8 @@
 					 (when (> (length ,displayed) 5)
 					   (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
 					   (push ,slope (get-channel ,@slope-channel))
-					   (push ,intercept (get-channel ,@intercept-channel))))))))))
+					   (push ,intercept (get-channel ,@intercept-channel)))))))
+       )))
        
 (defun compile-server ()
   (compile-file "server.lisp" :output-file "server.fasl"))
@@ -284,6 +304,7 @@
 			 (make-string-input-stream
 			  (with-output-to-string (out)
 			    (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ strem
+			    (format out "RPM-Raw=4~%")
 			    (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
 			    (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
 			    ))))
@@ -304,14 +325,12 @@
 		   :raw-channel (RPM-raw DAQ))
     
   ;send the calibrated rpm signal to the display
-  (add-output :agent display 
-	      :name RPM
-	      :value (get-channel RPM DAQ :N 1))
+  (add-output-event :agent display 
+		    :trigger-channel (RPM DAQ))
   
   ;send the raw rpm signal to the display as well
-  (add-output :agent display
-	      :name RPM-Raw
-	      :value (get-channel RPM-Raw DAQ :N 1))
+  (add-output-event :agent display
+		    :trigger-channel (RPM-Raw DAQ))
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
   (print-agents) 
