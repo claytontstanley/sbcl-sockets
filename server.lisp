@@ -218,7 +218,7 @@
 	 `(subseq ,channel 0 (min ,N (length ,channel))))))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
-  `(push ,Fn (get-channel ,@trigger-channel :from get-events)))
+  `(push-to-end ,Fn (get-channel ,@trigger-channel :from get-events)))
 
 ;TODO; can you allow 'write' access as well? that would be pretty sweet
 (defmacro with-channels (channels &body body)
