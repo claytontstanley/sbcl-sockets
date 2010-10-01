@@ -17,6 +17,10 @@
 (defmacro! square (o!x)
   `(* ,g!x ,g!x))
 
+(defmacro with-gensyms ((&rest names) &body body)
+  `(let ,(loop for n in names collect `(,n (gensym)))
+     ,@body))
+
 (defun linear-regression (xs ys)
   (let* ((x-bar (mean xs))
 	 (y-bar (mean ys))
@@ -257,8 +261,8 @@
 				   (aif ,value
 					(push it (get-channel ,name ,agent)))))))
 
-(defmacro add-calibration (&key (agent) (name) (slope-channel) (intercept-channel) 
-			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel) (N 30))
+(defmacro add-calibration (&key (slope-channel) (intercept-channel) (N 30)
+			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel))
   "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and displayed channels"
   (let* (;if slope-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
 	 (slope-channel (aif slope-channel it (list (gensym "SLOPE") (second raw-channel))))
@@ -268,8 +272,24 @@
 	 (measured (car measured-channel))
 	 (slope (car slope-channel))
 	 (intercept (car intercept-channel))
-	 (raw (car raw-channel)))
-    `(progn
+	 (raw (car raw-channel))
+	 (Fn (gensym)))
+    `(let ((,Fn (let ((count 0))
+		  (lambda ()
+		    (incf count)
+		    (format t "~a~%" count)
+		    (when (equal (mod count 2) 0)
+		      (with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
+				      (,@slope-channel :N 1) (,@intercept-channel :N 1))
+			;we need to convert the displayed channel back to raw data scale
+			(if (and ,intercept ,slope)
+			    (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
+			;then grab the updated slope and intercept, and push them on to the slope/intercept channel
+			(when (> (length ,displayed) 5)
+			  (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
+			  (push ,slope (get-channel ,@slope-channel))
+			  (push ,intercept (get-channel ,@intercept-channel)))))))))
+       
        ;add an event that; whenever the raw-channel receives a value, the calibrated value from the raw-channel will be pushed
        ;on the calibrated-channel
        (add-event :trigger-channel ,raw-channel
@@ -277,20 +297,10 @@
 				   (aif (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw))
 					(push it (get-channel ,@calibrated-channel))))))
        ;add the job that calibrates the calibrated channel
-       (add-job :agent ,agent
-		:job (define-job :name ,name :active-p nil
-				 :Fn (lambda ()
-				       (with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
-						       (,@slope-channel :N 1) (,@intercept-channel :N 1))
-				         ;we need to convert the displayed channel back to raw data scale
-					 (if (and ,intercept ,slope)
-					     (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
-				         ;then grab the updated slope and intercept, and push them on to the slope/intercept channel
-					 (when (> (length ,displayed) 5)
-					   (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
-					   (push ,slope (get-channel ,@slope-channel))
-					   (push ,intercept (get-channel ,@intercept-channel)))))))
-       )))
+       (add-event :trigger-channel ,measured-channel
+		  :Fn ,Fn)
+       (add-event :trigger-channel ,displayed-channel
+		  :Fn ,Fn))))
        
 (defun compile-server ()
   (compile-file "server.lisp" :output-file "server.fasl"))
@@ -316,10 +326,9 @@
       :socket (make-socket :bsd-stream bsd-stream
 			   :bsd-socket bsd-socket)))
 
-  ;add a job that the display agent can run; the job pushes a calibrated signal on the RPM channel for the DAQ
-  (add-calibration :agent display
-		   :name RPM-regression
-		   :measured-channel (rpm-measured display)
+  ;add an event that creates a calibrated-channel from the raw-channel, using the discrepency between the measured-channel
+  ;and displayed-channel to calibrate
+  (add-calibration :measured-channel (rpm-measured display)
 		   :displayed-channel (rpm-displayed display)
 		   :calibrated-channel (RPM DAQ)
 		   :raw-channel (RPM-raw DAQ))

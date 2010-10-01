@@ -19,7 +19,7 @@
 	(uni-send-string strm (format nil "RPM-measured=~a~%" (random 10)))
 	)
       ;since we sent updated rpm measurements to the server, trigger the rpm-regression event to recalibrate
-      (uni-send-string strm (format nil "(run-job rpm-regression display)~%"))
+      ;(uni-send-string strm (format nil "(run-job rpm-regression display)~%"))
       (when (string-equal line "[QUIT]")
 	(uni-send-string strm (format nil "[QUIT]~%"))
 	(sb-bsd-sockets::close strm)
