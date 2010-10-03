@@ -1,0 +1,4 @@
+albumBuilder= #'generate-docs
+file2load= htmlConfig.lisp 
+file2load= server.lisp
+
