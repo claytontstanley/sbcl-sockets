@@ -15,13 +15,16 @@
 		 (acond ,@(cdr clauses)))))))
 
 (defmacro! square (o!x)
+  "squares something"
   `(* ,g!x ,g!x))
 
 (defmacro with-gensyms ((&rest names) &body body)
+  "paul graham's with-gensyms"
   `(let ,(loop for n in names collect `(,n (gensym)))
      ,@body))
 
 (defun linear-regression (xs ys)
+  "returns the best-fitting slope & intercept for the x,y points"
   (let* ((x-bar (mean xs))
 	 (y-bar (mean ys))
 	 (Lxx (reduce #'+ (mapcar (lambda (xi) (square (- xi x-bar))) xs)))
@@ -83,7 +86,7 @@
 		  ((line2element line)
 		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
 		   (dolist (event (gethash (car it) events))
-		     (format t "~a~%" event)
+		     ;(format t "~a~%" event)
 		     (funcall event)))
 		  (t
 		   (eval (read-from-string line)))))))))
@@ -277,7 +280,7 @@
     `(let ((,Fn (let ((count 0))
 		  (lambda ()
 		    (incf count)
-		    (format t "~a~%" count)
+		    ;(format t "~a~%" count)
 		    (when (equal (mod count 2) 0)
 		      (with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
 				      (,@slope-channel :N 1) (,@intercept-channel :N 1))
