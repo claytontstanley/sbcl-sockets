@@ -340,12 +340,13 @@
 (defun compile-server ()
   (compile-file "server.lisp" :output-file "server.fasl"))
 
-;send is shorthand for the monitor to send a message to the server
 (let ((monitor-bsd-stream))
   (defpun send-Fn (str) (monitor-bsd-stream)
     (uni-send-string monitor-bsd-stream (format nil "~a~%" str)))
 
   (defmacro send (form)
+    "send is a shorthand for the monitor to send a message to the server;
+     form gets converted to a string that the server will eval"
     `(send-Fn ,(fast-concatenate "(eval " (toString form) ")"))))
 
 (defun run-monitor ()
