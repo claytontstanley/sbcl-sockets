@@ -42,6 +42,9 @@
       do (if (> (length ,g!channel) ,N)
 	     (setf ,g!channel (nbutlast ,g!channel)))))
 
+(defmacro socket-active-p (socket)
+  `(and ,socket (sb-bsd-sockets:socket-open-p ,socket)))
+
 (defmacro define-job (&key (name) (Fn) (active-p t) (quota 1))
   "discrete event simulator that executes functions at the specified time, 
    when active, you can pass functions to execute after each time the quota is reached
@@ -77,19 +80,30 @@
        (trim-data data N)
        (let ((line))
 	 ;update all of the raw data
-	 (while (handler-case (listen bsd-stream) 
-		  (error (condition) (declare (ignore condition)) nil))
+	 (while (ignore-errors (listen bsd-stream))
 	   (setf line (uni-socket-read-line bsd-stream))
+	   (format t "###~a~%" line)
 	   (acond ((string-equal line "[QUIT]")
 		   (if bsd-stream (sb-bsd-sockets::close bsd-stream))
 		   (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket)))
 		  ((line2element line)
 		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
 		   (dolist (event (gethash (car it) events))
-		     ;(format t "~a~%" event)
+		     ;(format t "###~a~%" event)
 		     (funcall event)))
-		  (t
-		   (eval (read-from-string line)))))))))
+		  (t ;execute a foreign function call; that is, run the message on the server, and return the output to the caller
+		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
+			 (val))
+		     (handler-case 
+			 (progn
+			   (with-output-to-string (*standard-output* fstr)
+			     (with-output-to-string (*error-output* fstr)
+			       (setf val (eval (read-from-string line)))))
+			   (setf fstr (format nil "~a~%~a" fstr val)))
+		       (error (condition) (setf fstr (format nil "~a~%~a" fstr condition))))
+		     ;if the caller's socket is still active, return the output to the caller
+		     (if (socket-active-p bsd-socket)
+			 (uni-send-string bsd-stream (format nil "~a~%" fstr)))))))))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
@@ -194,6 +208,24 @@
   (defpun agents () (agents)
     ()))
 
+(let ((fun (lambda (agent)
+	     (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
+	       (when (socket-active-p bsd-socket)
+		 (uni-send-string bsd-stream (format nil "[QUIT]~%"))
+		 (while (socket-active-p bsd-socket)
+		   (funcall (get-pandoric agent 'socket)))))
+	     (with-pandoric (agents) 'agents
+	       (setf agents (remove-if (lambda (x) (equal x agent)) agents))))))
+
+  (defmacro kill-agent (agent)
+    "attempts to cleanly close the agent's socket; then removes the agent from agents"
+    `(funcall ,fun ',agent))
+
+  (defmacro! kill-agents ()
+    "attempts to cleanly close all agent's sockets; then removes all agents from agents"
+    `(dolist (,g!agent (get-pandoric 'agents 'agents))
+       (funcall ,fun ,g!agent))))
+
 (defmacro get-socket (agent)
   "returns the agent's socket"
   `(get-pandoric ',agent 'socket))
@@ -280,7 +312,7 @@
     `(let ((,Fn (let ((count 0))
 		  (lambda ()
 		    (incf count)
-		    ;(format t "~a~%" count)
+		    ;(format t "###~a~%" count)
 		    (when (equal (mod count 2) 0)
 		      (with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
 				      (,@slope-channel :N 1) (,@intercept-channel :N 1))
@@ -307,7 +339,49 @@
        
 (defun compile-server ()
   (compile-file "server.lisp" :output-file "server.fasl"))
-     
+
+;send is shorthand for the monitor to send a message to the server
+(let ((monitor-bsd-stream))
+  (defpun send-Fn (str) (monitor-bsd-stream)
+    (uni-send-string monitor-bsd-stream (format nil "~a~%" str)))
+
+  (defmacro send (form)
+    `(send-Fn ,(fast-concatenate "(eval " (toString form) ")"))))
+
+(defun run-monitor ()
+  (let ((bsd-socket) (bsd-stream) (line))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket "127.0.0.1" 9558))
+    (with-pandoric (monitor-bsd-stream) #'send-Fn
+      (setf monitor-bsd-stream bsd-stream))
+    (while (socket-active-p bsd-socket)
+	       
+      (handler-case (format t "> ~a~%" (eval (read)))
+	(error (condition) (format t "~a~%" condition)))
+
+      (while (and (socket-active-p bsd-socket) (listen bsd-stream))
+	(setf line (read-line bsd-stream))
+	(format t "###~a~%" line)
+	(when (string-equal line "[QUIT]")
+	  (uni-send-string bsd-stream (format nil "[QUIT]~%"))
+	  (sb-bsd-sockets::close bsd-stream)
+	  (sb-bsd-sockets:socket-close bsd-socket))))))
+  
+(defun run-client ()
+  (let ((bsd-socket) (bsd-stream) (line))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket "127.0.0.1" 9557))
+    (uni-send-string bsd-stream (format nil "(print-agents)~%"))
+    (while (socket-active-p bsd-socket)
+      (while (and (socket-active-p bsd-socket) (listen bsd-stream))
+	(setf line (read-line bsd-stream))
+	(format t "###~a~%" line)
+	(dotimes (i 10)
+	  (uni-send-string bsd-stream (format nil "RPM-displayed=~a~%" (random 10)))
+	  (uni-send-string bsd-stream (format nil "RPM-measured=~a~%" (random 10))))
+	(when (string-equal line "[QUIT]")
+	  (uni-send-string bsd-stream (format nil "[QUIT]~%"))
+	  (sb-bsd-sockets::close bsd-stream)
+	  (sb-bsd-sockets:socket-close bsd-socket))))))
+       
 (defun run-server ()
   "top-level function that runs the lisp backend server"
 
@@ -321,11 +395,17 @@
 			    (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
 			    (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
 			    ))))
-
-  
+			  ;(make-string-output-stream))))
+			
   ;agent in charge of all jobs concerning the display (that is, the lisp->os x bridge)
   (multiple-value-bind (bsd-stream bsd-socket) (uni-prepare-socket "127.0.0.1" 9557)
     (define-agent :name display 
+      :socket (make-socket :bsd-stream bsd-stream
+			   :bsd-socket bsd-socket)))
+
+  ;agent in charge of monitoring the status of the server
+  (multiple-value-bind (bsd-stream bsd-socket) (uni-prepare-socket "127.0.0.1" 9558)
+    (define-agent :name monitor
       :socket (make-socket :bsd-stream bsd-stream
 			   :bsd-socket bsd-socket)))
 
@@ -347,21 +427,13 @@
   ;display all agents and their jobs that will be called each time 'update-call' is called
   (print-agents) 
 
-  ;call 'update-all' a bunch of times; this will eventually turn into the 'while' loop 
-  ;that keeps looping forever; checking for new agents that want to sign on... letting agents
-  ;sign off; adding jobs to different agents, and running all the jobs, etc.
+  ;update-agents keeps getting called until there are no agents left to update
+  ;agents can be removed by evaling (kill-agent agent), or (kill-agents)
+  ;currently, the monitor sends a "(kill-agents)" message to the server, which
+  ;clears all the agents, which then causes this while loop to exit
   (time
-   (with-pandoric (bsd-socket bsd-stream) (get-socket display)
-     ;just looping through N times for now; eventually, this will be looped until os x signals an exit
-     (let ((i 0))
-       (while (and (< (incf i) 120) bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
-	 (update-agents)))
-     ;telling the os x client to exit
-     (uni-send-string bsd-stream (format nil "[QUIT]~%"))
-     ;ox x will receive the exit signal, and send one back (letting the server know that it's going to kill itself)
-     ;we wait until the client sends the exit signal back, and then exit the server
-     (while (and bsd-socket (sb-bsd-sockets:socket-open-p bsd-socket))
-       (funcall (get-socket display))))))
+   (while (get-pandoric 'agents 'agents)
+     (update-agents))))
 
 
 

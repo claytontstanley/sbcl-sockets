@@ -1,2 +1,2 @@
-file2load=client.lisp
+file2load=server.lisp
 albumBuilder=#'run-client
