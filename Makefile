@@ -1,5 +1,5 @@
 
-all: client
+all: display
 
 
 monitor:
@@ -11,5 +11,5 @@ server:
 compile:
 	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil server-compile.txt nil
 
-client:
-	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil client-config.txt nil
+display:
+	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil display-config.txt nil

@@ -15,14 +15,17 @@
 ;;; uni-prepare-socket
 ;;; this is the server version of uni-make-socket; call uni-prepare-socket on the server
 ;;; call uni-make-socket on the client
-(defun uni-prepare-socket (host port)
-  (let* ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
-	 (strm))
-    (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
-    (sb-bsd-sockets::socket-listen sock 5)
-    (setf sock (sb-bsd-sockets::socket-accept sock))
-    (setf strm (sb-bsd-sockets::socket-make-stream sock :input t :output t))
-    (values strm sock)))
+(defmacro uni-prepare-socket (host port)
+  `(let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
+	 (host ,host)
+	 (port ,port))
+     (setf (sb-bsd-sockets:non-blocking-mode sock) t)
+     (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
+     (sb-bsd-sockets::socket-listen sock 5)
+     (plambda () (sock host port)
+       (aif (sb-bsd-sockets::socket-accept sock)
+	    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)
+	    (values nil nil)))))
 
 ;;; uni-run-process
 ;;; This function takes 2 parameters.  The first is a string which will be

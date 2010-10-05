@@ -61,22 +61,26 @@
 	     (funcall Fn)
 	     (setf quot 0))))))
 
-(defmacro make-socket (&key (bsd-stream) (bsd-socket))
+(defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
   "defines a socket that is a pandoric function
    the function has an inner loop that processes all lines currently on the stream;
    if a line is '[QUIT]', it will close the stream;
    if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
    otherwise, it will eval the line in place"
-  `(let (;stream that will be used to send & receive messages between the lisp backend & the stream
-	 (bsd-stream ,bsd-stream)
-	 (bsd-socket ,bsd-socket)
-         ;data storing any received messages
-	 (data (make-hash-table :test #'equalp))
-	 ;data storing any triggered events
-	 (events (make-hash-table :test #'equalp))
-         ;maximum length of a channel in the data hash table
-	 (N 100))
-     (plambda () (bsd-stream bsd-socket data N events)
+  `(let* (;stream that will be used to send & receive messages between the lisp backend & the stream
+	  (bsd-stream ,bsd-stream)
+	  (bsd-socket ,bsd-socket)
+          ;data storing any received messages
+	  (data (make-hash-table :test #'equalp))
+	  ;data storing any triggered events
+	  (events (make-hash-table :test #'equalp))
+          ;maximum length of a channel in the data hash table
+	  (N 100)
+	  (uni-prepare-socket-Fn (if (and ,host ,port) (uni-prepare-socket ,host ,port))))
+     (plambda () (bsd-stream bsd-socket data events N uni-prepare-socket-Fn)
+       ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
+       (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
+	   (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
        (trim-data data N)
        (let ((line))
 	 ;update all of the raw data
@@ -85,13 +89,15 @@
 	   (format t "###~a~%" line)
 	   (acond ((string-equal line "[QUIT]")
 		   (if bsd-stream (sb-bsd-sockets::close bsd-stream))
-		   (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket)))
+		   (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
+		   (setf bsd-stream nil)
+		   (setf bsd-socket nil))
 		  ((line2element line)
 		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
 		   (dolist (event (gethash (car it) events))
 		     ;(format t "###~a~%" event)
 		     (funcall event)))
-		  (t ;execute a foreign function call; that is, run the message on the server, and return the output to the caller
+		  (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
 			 (val))
 		     (handler-case 
@@ -100,10 +106,11 @@
 			     (with-output-to-string (*error-output* fstr)
 			       (setf val (eval (read-from-string line)))))
 			   (setf fstr (format nil "~a~%~a" fstr val)))
-		       (error (condition) (setf fstr (format nil "~a~%~a" fstr condition))))
+		       (error (condition) (setf fstr (format nil "~a~%error: ~a" fstr condition))))
 		     ;if the caller's socket is still active, return the output to the caller
-		     (if (socket-active-p bsd-socket)
-			 (uni-send-string bsd-stream (format nil "~a~%" fstr)))))))))))
+		     (handler-case
+			 (uni-send-string bsd-stream (format nil "~a~%" fstr))
+		       (error (condition) (format t "error: ~a~%" condition)))))))))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
@@ -159,20 +166,17 @@
        (with-pandoric (Fn) (gethash ',name jobs)
 	 (funcall Fn)))))
 
-(defmacro define-agent (&key (name) (socket))
+(defmacro define-agent (&key (name) (socket) (host) (port))
   "container to store a collection of jobs (in a hash table)
    defines a pandoric function that will loop through all the jobs and 
    execute the functions that have been latched to each job"
   `(let ((jobs (make-hash-table))
-	 (socket ,socket))
+	 (socket ,(aif socket it (make-socket :host host :port port))))
      (defpun ,name () (jobs socket)
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
-     (if socket
-	 (add-job :agent ,name
-		  :job (define-job :name ,name
-			 :quota 1 
-			 :Fn socket)))
+     (add-job :agent ,name
+	      :job (define-job :name ,name :quota 1 :Fn socket))
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
 ;defining function that prints an agent
@@ -347,7 +351,11 @@
   (defmacro send (form)
     "send is a shorthand for the monitor to send a message to the server;
      form gets converted to a string that the server will eval"
-    `(send-Fn ,(fast-concatenate "(eval " (toString form) ")"))))
+    `(send-Fn ,(fast-concatenate "(eval " (toString form) ")")))
+
+  (defmacro send-string (str)
+    "sends string str to server"
+    `(send-Fn ,str)))
 
 (defun run-monitor ()
   (let ((bsd-socket) (bsd-stream) (line))
@@ -367,7 +375,7 @@
 	  (sb-bsd-sockets::close bsd-stream)
 	  (sb-bsd-sockets:socket-close bsd-socket))))))
   
-(defun run-client ()
+(defun run-display ()
   (let ((bsd-socket) (bsd-stream) (line))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket "127.0.0.1" 9557))
     (uni-send-string bsd-stream (format nil "(print-agents)~%"))
@@ -391,24 +399,22 @@
     :socket (make-socket :bsd-stream 
 			 (make-string-input-stream
 			  (with-output-to-string (out)
-			    (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ strem
+			    (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ stream
 			    (format out "RPM-Raw=4~%")
 			    (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
 			    (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
 			    ))))
-			  ;(make-string-output-stream))))
-			
-  ;agent in charge of all jobs concerning the display (that is, the lisp->os x bridge)
-  (multiple-value-bind (bsd-stream bsd-socket) (uni-prepare-socket "127.0.0.1" 9557)
-    (define-agent :name display 
-      :socket (make-socket :bsd-stream bsd-stream
-			   :bsd-socket bsd-socket)))
 
-  ;agent in charge of monitoring the status of the server
-  (multiple-value-bind (bsd-stream bsd-socket) (uni-prepare-socket "127.0.0.1" 9558)
-    (define-agent :name monitor
-      :socket (make-socket :bsd-stream bsd-stream
-			   :bsd-socket bsd-socket)))
+  ;agent in charge of all jobs concerning the display (that is, the lisp->OSX bridge)
+  (define-agent :name display
+    :host "127.0.0.1" 
+    :port 9557)
+
+  ;agent in charge of monitoring the server; 
+  ;agent can send the server messages, query, execute remote procedure calls (RPCs) etc.
+  (define-agent :name monitor
+    :host "127.0.0.1"
+    :port 9558)
 
   ;add an event that creates a calibrated-channel from the raw-channel, using the discrepency between the measured-channel
   ;and displayed-channel to calibrate
@@ -426,7 +432,7 @@
 		    :trigger-channel (RPM-Raw DAQ))
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
-  (print-agents) 
+  (print-agents)
 
   ;update-agents keeps getting called until there are no agents left to update
   ;agents can be removed by evaling (kill-agent agent), or (kill-agents)
