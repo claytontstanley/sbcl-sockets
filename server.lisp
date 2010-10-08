@@ -18,6 +18,10 @@
   "squares something"
   `(* ,g!x ,g!x))
 
+(defmacro attempt (form &key (on-error `(format t "error: ~a~%" condition)))
+  "anaphoric macro for attemping to evaluate form; default is to print error to screen if error"
+  `(handler-case ,form (error (condition) ,on-error)))
+
 (defmacro with-gensyms ((&rest names) &body body)
   "paul graham's with-gensyms"
   `(let ,(loop for n in names collect `(,n (gensym)))
@@ -60,9 +64,7 @@
 	   (incf quot)
 	   (when (eq quot quota)
 	     (setf quot 0)
-	     (handler-case (funcall Fn) ;will return the Fn's return, if no error
-	       (error (condition) (format t "error: ~a~%" condition)))
-	     )))))
+	     (attempt (funcall Fn)))))))
 
 (defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
   "defines a socket that is a pandoric function
@@ -101,22 +103,19 @@
 		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
 		   (dolist (event (gethash (car it) events))
 		     (format t "evaluating event on ~a:~a: ~a~%" host port event)
-		     (handler-case (funcall event)
-		       (error (condition) (format t "error: ~a~%" condition)))))
+		     (attempt (funcall event))))
 		  (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
 			 (val))
-		     (handler-case 
-			 (progn
-			   (with-output-to-string (*standard-output* fstr)
-			     (with-output-to-string (*error-output* fstr)
-			       (setf val (eval (read-from-string line)))))
-			   (setf fstr (format nil "~a~%~a" fstr val)))
-		       (error (condition) (setf fstr (format nil "~a~%error: ~a" fstr condition))))
+		     (attempt (progn
+				(with-output-to-string (*standard-output* fstr)
+				  (with-output-to-string (*error-output* fstr)
+				    (setf val (eval (read-from-string line)))))
+				(setf fstr (format nil "~a~%~a" fstr val)))
+			      :on-error (setf fstr (format nil "~a~%error: ~a" fstr condition)))
 		     (format t "~a~%" fstr)
 		     ;if the caller's socket is still active, return the output to the caller
-		     (handler-case (uni-send-string bsd-stream fstr)
-		       (error (condition) (format t "error: ~a~%" condition)))))))))))
+		     (attempt (uni-send-string bsd-stream fstr))))))))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
@@ -260,6 +259,7 @@
 	 `(subseq ,channel 0 (min ,N (length ,channel))))))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
+  "adds an event Fn to the trigger-channel"
   `(push-to-end ,Fn (get-channel ,@trigger-channel :from get-events)))
 
 ;TODO; can you allow 'write' access as well? that would be pretty sweet
@@ -288,6 +288,7 @@
 					(send-output ,agent ,name it))))))
 
 (defmacro add-output-event (&key (agent) (name) (trigger-channel) (value))
+  "adds an output event to agent that sends 'value' through the socket when trigger-channel is updated"
   (if (not name) (setf name (car trigger-channel)))
   (if (not value) (setf value `(get-channel ,@trigger-channel :N 1)))
   `(add-event :trigger-channel ,trigger-channel
@@ -365,14 +366,12 @@
   `(send (uni-send-string (get-bsd-stream ,agent) (convert ,form))))
 
 (defun run-monitor ()
+  "connects a monitor agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9558))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (setf *monitor-bsd-stream* bsd-stream)
     (while (socket-active-p bsd-socket)
-      
-      (handler-case (format t "> ~a~%" (eval (read)))
-	(error (condition) (format t "~a~%" condition)))
-      
+      (if (listen) (attempt (eval (read))))
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
 	(format t "received on ~a:~a: ~a~%" host port line)
@@ -382,6 +381,7 @@
 	  (sb-bsd-sockets:socket-close bsd-socket))))))
   
 (defun run-display ()
+  "connects a display agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (uni-send-string bsd-stream "(print-agents)")
