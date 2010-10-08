@@ -39,8 +39,9 @@
 (defmacro! trim-data (data N)
   "trims the ends off all channels in the data hash table, so that no channel is > N in length"
   `(loop for ,g!channel being the hash-values of ,data
-      do (if (> (length ,g!channel) ,N)
-	     (setf ,g!channel (nbutlast ,g!channel)))))
+      do (let ((Ln (+ 1 (length ,g!channel)))) 
+	   (while (> (decf Ln) ,N)
+	     (setf ,g!channel (nbutlast ,g!channel))))))
 
 (defmacro socket-active-p (socket)
   `(and ,socket (sb-bsd-sockets:socket-open-p ,socket)))
@@ -75,9 +76,11 @@
 	  ;data storing any triggered events
 	  (events (make-hash-table :test #'equalp))
           ;maximum length of a channel in the data hash table
+	  (host ,(aif host (symbol-name it)))
+	  (port ,port)
 	  (N 100)
-	  (uni-prepare-socket-Fn (if (and ,host ,port) (uni-prepare-socket ,host ,port))))
-     (plambda () (bsd-stream bsd-socket data events N uni-prepare-socket-Fn)
+	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket host port))))
+     (plambda () (bsd-stream bsd-socket data events N uni-prepare-socket-Fn host port)
        ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
        (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
 	   (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
@@ -86,7 +89,7 @@
 	 ;update all of the raw data
 	 (while (ignore-errors (listen bsd-stream))
 	   (setf line (uni-socket-read-line bsd-stream))
-	   (format t "###~a~%" line)
+	   (format t "received on ~a:~a: ~a~%" host port line)
 	   (acond ((string-equal line "[QUIT]")
 		   (if bsd-stream (sb-bsd-sockets::close bsd-stream))
 		   (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
@@ -95,8 +98,10 @@
 		  ((line2element line)
 		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
 		   (dolist (event (gethash (car it) events))
-		     ;(format t "###~a~%" event)
-		     (funcall event)))
+		     (format t "evaluating event on ~a:~a: ~a~%" host port event)
+		     (handler-case
+			 (funcall event)
+		       (error (condition) (format t "error: ~a~%" condition)))))
 		  (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
 			 (val))
@@ -107,6 +112,7 @@
 			       (setf val (eval (read-from-string line)))))
 			   (setf fstr (format nil "~a~%~a" fstr val)))
 		       (error (condition) (setf fstr (format nil "~a~%error: ~a" fstr condition))))
+		     (format t "~a~%" fstr)
 		     ;if the caller's socket is still active, return the output to the caller
 		     (handler-case
 			 (uni-send-string bsd-stream (format nil "~a~%" fstr))
@@ -171,7 +177,7 @@
    defines a pandoric function that will loop through all the jobs and 
    execute the functions that have been latched to each job"
   `(let ((jobs (make-hash-table))
-	 (socket ,(aif socket it (make-socket :host host :port port))))
+	 (socket (aif ,socket it (make-socket :host ,host :port ,port))))
      (defpun ,name () (jobs socket)
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
@@ -195,18 +201,14 @@
     `(dolist (,g!agent (get-pandoric 'agents 'agents))
        (funcall ,fun ,g!agent))))
 
-;defining function that updates an agent
-(let ((fun (lambda (agent)
-	     (funcall (symbol-function agent)))))
+(defmacro update-agent (agent)
+  "updates agent 'agent'"
+  `(funcall (symbol-function ',agent)))
 
-  (defmacro update-agent (agent)
-    "updates agent 'agent'"
-    `(funcall ,fun ',agent))
-
-  (defmacro! update-agents ()
-    "updates all of the agents that have been created"
-    `(dolist (,g!agent (get-pandoric #'agents 'agents))
-       (funcall ,fun ,g!agent))))
+(defmacro! update-agents ()
+  "updates all of the agents that have been created"
+  `(dolist (,g!agent (get-pandoric #'agents 'agents))
+     (funcall (symbol-function ,g!agent))))
 
 (let ((agents))
   (defpun agents () (agents)
@@ -219,7 +221,8 @@
 		 (while (socket-active-p bsd-socket)
 		   (funcall (get-pandoric agent 'socket)))))
 	     (with-pandoric (agents) 'agents
-	       (setf agents (remove-if (lambda (x) (equal x agent)) agents))))))
+	       (setf agents (remove-if (lambda (x) (equal x agent)) agents)))
+	     (fmakunbound agent))))
 
   (defmacro kill-agent (agent)
     "attempts to cleanly close the agent's socket; then removes the agent from agents"
@@ -358,8 +361,8 @@
     `(send-Fn ,str)))
 
 (defun run-monitor ()
-  (let ((bsd-socket) (bsd-stream) (line))
-    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket "127.0.0.1" 9558))
+  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9558))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (with-pandoric (monitor-bsd-stream) #'send-Fn
       (setf monitor-bsd-stream bsd-stream))
     (while (socket-active-p bsd-socket)
@@ -369,20 +372,20 @@
 
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
-	(format t "###~a~%" line)
+	(format t "received on ~a:~a: ~a~%" host port line)
 	(when (string-equal line "[QUIT]")
 	  (uni-send-string bsd-stream (format nil "[QUIT]~%"))
 	  (sb-bsd-sockets::close bsd-stream)
 	  (sb-bsd-sockets:socket-close bsd-socket))))))
   
 (defun run-display ()
-  (let ((bsd-socket) (bsd-stream) (line))
-    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket "127.0.0.1" 9557))
+  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (uni-send-string bsd-stream (format nil "(print-agents)~%"))
     (while (socket-active-p bsd-socket)
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
-	(format t "###~a~%" line)
+	(format t "received on ~a:~a: ~a~%" host port line)
 	(dotimes (i 10)
 	  (uni-send-string bsd-stream (format nil "RPM-displayed=~a~%" (random 10)))
 	  (uni-send-string bsd-stream (format nil "RPM-measured=~a~%" (random 10))))
@@ -390,11 +393,14 @@
 	  (uni-send-string bsd-stream (format nil "[QUIT]~%"))
 	  (sb-bsd-sockets::close bsd-stream)
 	  (sb-bsd-sockets:socket-close bsd-socket))))))
+
+;(setf *break-on-signals* t)
        
 (defun run-server ()
   "top-level function that runs the lisp backend server"
 
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
+  ;mocking up some data in here for now, until we can actually hook up the DAQ to the server
   (define-agent :name DAQ 
     :socket (make-socket :bsd-stream 
 			 (make-string-input-stream
@@ -407,13 +413,13 @@
 
   ;agent in charge of all jobs concerning the display (that is, the lisp->OSX bridge)
   (define-agent :name display
-    :host "127.0.0.1" 
+    :host 127.0.0.1 
     :port 9557)
 
   ;agent in charge of monitoring the server; 
   ;agent can send the server messages, query, execute remote procedure calls (RPCs) etc.
   (define-agent :name monitor
-    :host "127.0.0.1"
+    :host 127.0.0.1
     :port 9558)
 
   ;add an event that creates a calibrated-channel from the raw-channel, using the discrepency between the measured-channel
@@ -436,7 +442,7 @@
 
   ;update-agents keeps getting called until there are no agents left to update
   ;agents can be removed by evaling (kill-agent agent), or (kill-agents)
-  ;currently, the monitor sends a "(kill-agents)" message to the server, which
+  ;currently, the monitor sends a "(kill-agents)" RPC message to the server, which
   ;clears all the agents, which then causes this while loop to exit
   (time
    (while (get-pandoric 'agents 'agents)

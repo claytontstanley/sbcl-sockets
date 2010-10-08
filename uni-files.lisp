@@ -11,7 +11,6 @@
     (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
       (values stream sock))))
 
-
 ;;; uni-prepare-socket
 ;;; this is the server version of uni-make-socket; call uni-prepare-socket on the server
 ;;; call uni-make-socket on the client

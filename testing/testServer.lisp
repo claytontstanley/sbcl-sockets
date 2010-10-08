@@ -1,11 +1,11 @@
 (define-agent :name the-managers)
 
-(defmacro get-agent (names &optional (strings))
+(defmacro get-agent (names &key (strings) (agent `the-managers))
   (if (not strings) (setf strings (mapcar #'symbol-name names)))
   `(progn
-     (define-agent :name the-managers)
+     (define-agent :name ,agent)
      ,@(mapcar (lambda (name string)
-		 `(add-job :agent the-managers :job (define-job :name ,name :Fn (lambda () (format t "~a~%" ,string)))))
+		 `(add-job :agent ,agent :job (define-job :name ,name :Fn (lambda () (format t "~a~%" ,string)))))
 		 names strings)))
 
 (defmacro! errors-p (form)
@@ -133,7 +133,7 @@
 (deftest test-define-agent ()
   (macrolet ((test-definition (names strings)
 	       `(progn
-		  (get-agent ,names ,strings)
+		  (get-agent ,names :strings ,strings)
 		  (check
 		   (string-equal
 		    (with-output-to-string (*standard-output*)
@@ -146,51 +146,142 @@
 
 (deftest test-print-agent ()
   (macrolet ((test-single (names strings)
-	       `(progn
-		  (get-agent ,names ,strings)
-		  (check
-		   (string-equal
-		    (with-output-to-string (*standard-output*)
-		      (print-agent the-managers))
-		    (format nil "~{from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%~}" 
-			    (flatten 
-			     (mapcar (lambda (a b c d e) (list a b c d e))
-				     (make-list 2 :initial-element 'the-managers)
-				     ',names
-				     (make-list 2 :initial-element t)
-				     (make-list 2 :initial-element 0)
-				     (make-list 2 :initial-element 1)))))))))
+	       (let ((size (+ 1 (length names))))
+		 `(progn
+		    (get-agent ,names :strings ,strings)
+		    (check
+		     (string-equal
+		      (with-output-to-string (*standard-output*)
+			(print-agent the-managers))
+		      (format nil "~{from: ~a, name: ~a, active: ~a, quot/quota: ~a/~a~%~}" 
+			      (flatten 
+			       (mapcar #'list
+				       (make-list ,size :initial-element 'the-managers)
+				       '(the-managers ,@names)
+				       (make-list ,size :initial-element t)
+				       (make-list ,size :initial-element 0)
+				       (make-list ,size :initial-element 1))))))))))
     (test-single (name1 name2) ("output1" "output2"))
     (test-single (name1) ("output"))
     (test-single () ())))
 
 (deftest test-print-agents ()
   (macrolet ((check-print-agents (names)
+	       (let ((size (+ 1 (length names)))) ;+1 for the socket job that's implicitly created
+		 `(progn
+		    (with-pandoric (agents) 'agents
+		      (setf agents nil))
+		    (get-agent ,names)
+		    (check
+		     (equal
+		      ,size
+		      (length (get-lines (with-output-to-string (*standard-output*) (print-agents))))))))))
+    (check-print-agents (one two three four))
+    (check-print-agents ())
+    (check-print-agents (hello))))
+
+(deftest test-update-agent ()
+  (macrolet ((check-update-agent (names)
+	       `(progn
+		  (get-agent ,names)
+		  (check
+		   (string-equal
+		    (with-output-to-string (*standard-output*)
+		      (update-agent the-managers))
+		    (format nil "~{~a~%~}" (list ,@(mapcar #'symbol-name names))))))))
+    (check-update-agent (one two three four))
+    (check-update-agent ())
+    (check-update-agent (hello))))
+
+(deftest test-update-agents ()
+  (macrolet ((check-update-agents (names)
 	       `(progn
 		  (with-pandoric (agents) 'agents
 		    (setf agents nil))
 		  (get-agent ,names)
 		  (check
-		   (equal
+		   (equal 
 		    ,(length names)
-		    (length (get-lines (with-output-to-string (*standard-output*) (print-agents)))))))))
-    (check-print-agents (one two three four))
-    (check-print-agents ())
-    (check-print-agents (hello))))
-	       
+		    (length (get-lines (with-output-to-string (*standard-output*) (update-agents)))))))))
+    (check-update-agents (one two three four))
+    (check-update-agents ())
+    (check-update-agents (hello))))
 
+(deftest test-kill-agent ()
+  (macrolet ((check-kill-agent (agents agent)
+	       `(progn
+		  (with-pandoric (agents) 'agents
+		    (setf agents nil))
+		  ,@(mapcar (lambda (agent) `(get-agent (one two three four) :agent ,agent)) agents)
+		  ,@(mapcar (lambda (agent) `(check (fboundp ',agent))) agents)
+		  (kill-agent ,agent)
+		  (check (not (fboundp ',agent)))
+		  (check
+		   (equal
+		    (sort (mapcar #'symbol-name (get-pandoric 'agents 'agents)) #'string<)
+		    (sort (mapcar #'symbol-name (remove-if
+						 (lambda (x) (equal x ',agent))
+						 (list ,@(mapcar (lambda (x) `',x) agents))))
+			  #'string<))))))
+    (check-kill-agent (agent1 agent2 agent3) agent1)
+    (check-kill-agent (agent1 agent2) agent2)
+    (check-kill-agent (agent2) agent2)
+    (errors-p
+     (check-kill-agent (agent2) agent1))
+    (errors-p
+     (check-kill-agent () agent2))
+    (errors-p
+     (check-kill-agent (agent1 agent2) agent3))))
+
+(deftest test-kill-agents ()
+  (macrolet ((check-kill-agents (agents)
+	       `(progn
+		  (with-pandoric (agents) 'agents
+		    (setf agents nil)
+		    ,@(mapcar (lambda (agent) `(get-agent (one two) :agent ,agent)) agents)
+		    (kill-agents)
+		    (check (equal nil (get-pandoric 'agents 'agents)))
+		    ,@(mapcar (lambda (agent) `(check (not (fboundp ',agent)))) agents)))))
+    (check-kill-agents (agent1 agent2 agent3))
+    (check-kill-agents ())
+    (check-kill-agents (agent4))))
+
+(deftest test-trim-data ()
+  (macrolet ((check-trim-data (size N trimmedSize)
+	       `(let ((data (make-hash-table))
+		      (keys))
+		  (dotimes (i ,(length size))
+		    (push (gensym) keys))
+		  (mapcar (lambda (key lngth) (setf (gethash key data) (make-list lngth :initial-element 1))) 
+			  keys (list ,@size))
+		  (trim-data data ,N)
+		  (check
+		   (equal (print (mapcar (lambda (key) (length (gethash key data))) keys))
+			  (print (list ,@trimmedSize))))
+		  )))
+    (check-trim-data (1 2 5 6 11 3 2) 10 (1 2 5 6 10 3 2))
+    (check-trim-data (1) 10 (1))
+    (check-trim-data (9 99 11111 1 12) 11 (9 11 11 1 11))
+    (check-trim-data (9 10 11 10 9 8 7 12) 10 (9 10 10 10 9 8 7 10))))
+		 
+	       
 (defun test-server ()
   (let ((result
 	 (runtests 
 	  (test-define-job)
-	  (test-define-agent)
-	  (test-print-agent)
 	  (test-add-job)
 	  (test-remove-job)
 	  (test-job-present-p)
 	  (test-activate-deactivate-job)
 	  (test-job-active-p)
 	  (test-run-job)
+	  (test-define-agent)
+	  (test-print-agent)
 	  (test-print-agents)
+	  (test-update-agent)
+	  (test-update-agents)
+	  (test-kill-agent)
+	  (test-kill-agents)
+	  (test-trim-data)
 	  )))
     (format t "~%overall: ~:[FAIL~;pass~]~%" result)))
