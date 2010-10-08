@@ -59,8 +59,10 @@
 	 (when active
 	   (incf quot)
 	   (when (eq quot quota)
-	     (funcall Fn)
-	     (setf quot 0))))))
+	     (setf quot 0)
+	     (handler-case (funcall Fn) ;will return the Fn's return, if no error
+	       (error (condition) (format t "error: ~a~%" condition)))
+	     )))))
 
 (defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
   "defines a socket that is a pandoric function
@@ -79,7 +81,7 @@
 	  (host ,(aif host (symbol-name it)))
 	  (port ,port)
 	  (N 100)
-	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket host port))))
+	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket ,host ,port))))
      (plambda () (bsd-stream bsd-socket data events N uni-prepare-socket-Fn host port)
        ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
        (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
@@ -99,8 +101,7 @@
 		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
 		   (dolist (event (gethash (car it) events))
 		     (format t "evaluating event on ~a:~a: ~a~%" host port event)
-		     (handler-case
-			 (funcall event)
+		     (handler-case (funcall event)
 		       (error (condition) (format t "error: ~a~%" condition)))))
 		  (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
@@ -114,8 +115,7 @@
 		       (error (condition) (setf fstr (format nil "~a~%error: ~a" fstr condition))))
 		     (format t "~a~%" fstr)
 		     ;if the caller's socket is still active, return the output to the caller
-		     (handler-case
-			 (uni-send-string bsd-stream (format nil "~a~%" fstr))
+		     (handler-case (uni-send-string bsd-stream fstr)
 		       (error (condition) (format t "error: ~a~%" condition)))))))))))
 
 (defmacro add-job (&key (job) (agent))
@@ -217,7 +217,7 @@
 (let ((fun (lambda (agent)
 	     (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
 	       (when (socket-active-p bsd-socket)
-		 (uni-send-string bsd-stream (format nil "[QUIT]~%"))
+		 (uni-send-string bsd-stream "[QUIT]")
 		 (while (socket-active-p bsd-socket)
 		   (funcall (get-pandoric agent 'socket)))))
 	     (with-pandoric (agents) 'agents
@@ -277,7 +277,7 @@
 (defmacro send-output (agent key val)
   "sends key=val~% to agent's stream"
   `(uni-send-string (get-bsd-stream ,agent)
-		    (format nil "~a=~a~%" ,(symbol-name key) ,val)))
+		    (format nil "~a=~a" ,(symbol-name key) ,val)))
   
 (defmacro add-output (&key (agent) (name) (quota) (value))
   "adds an output to agent that sends 'value' through the socket"
@@ -316,22 +316,19 @@
 	 (intercept (car intercept-channel))
 	 (raw (car raw-channel))
 	 (Fn (gensym)))
-    `(let ((,Fn (let ((count 0))
-		  (lambda ()
-		    (incf count)
-		    ;(format t "###~a~%" count)
-		    (when (equal (mod count 2) 0)
-		      (with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
-				      (,@slope-channel :N 1) (,@intercept-channel :N 1))
-			;we need to convert the displayed channel back to raw data scale
-			(if (and ,intercept ,slope)
-			    (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
-			;then grab the updated slope and intercept, and push them on to the slope/intercept channel
-			(when (> (length ,displayed) 5)
-			  (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
-			  (push ,slope (get-channel ,@slope-channel))
-			  (push ,intercept (get-channel ,@intercept-channel)))))))))
-       
+    `(let ((,Fn (define-job :name ,(symb `calibration-for- calibrated-channel)
+		  :Fn (lambda ()
+			(with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
+					(,@slope-channel :N 1) (,@intercept-channel :N 1))
+			  ;we need to convert the displayed channel back to raw data scale
+			  (if (and ,intercept ,slope)
+			      (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
+			  ;then grab the updated slope and intercept, and push them on to the slope/intercept channel
+			  (when (> (length ,displayed) 5)
+			    (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
+			    (push ,slope (get-channel ,@slope-channel))
+			    (push ,intercept (get-channel ,@intercept-channel)))))
+		  :quota 2))) ;quota is 2 here b/c this job should only fire after both the measured and displayed values are sent back       
        ;add an event that; whenever the raw-channel receives a value, the calibrated value from the raw-channel will be pushed
        ;on the calibrated-channel
        (add-event :trigger-channel ,raw-channel
@@ -343,54 +340,60 @@
 		  :Fn ,Fn)
        (add-event :trigger-channel ,displayed-channel
 		  :Fn ,Fn))))
+
+(defmacro convert (form)
+  "converts a form to a string that when (eval (read-from-string str)) returns the evaled form"
+  `(format nil "(eval ~a )" ,(toString form)))
        
 (defun compile-server ()
   (compile-file "server.lisp" :output-file "server.fasl"))
 
-(let ((monitor-bsd-stream))
-  (defpun send-Fn (str) (monitor-bsd-stream)
-    (uni-send-string monitor-bsd-stream (format nil "~a~%" str)))
+;dynamically scoped variable that stores the monitor's bsd-stream
+(defvar *monitor-bsd-stream*)
+  
+(defmacro send (form)
+  "send is a shorthand for the monitor to send a message to the server;
+   form gets converted to a string that the server will eval"
+  `(uni-send-string *monitor-bsd-stream* (convert ,form)))
 
-  (defmacro send (form)
-    "send is a shorthand for the monitor to send a message to the server;
-     form gets converted to a string that the server will eval"
-    `(send-Fn ,(fast-concatenate "(eval " (toString form) ")")))
+(defmacro send-string (str)
+  "sends string str to server"
+  `(uni-send-string *monitor-bsd-stream* ,str))
 
-  (defmacro send-string (str)
-    "sends string str to server"
-    `(send-Fn ,str)))
+(defmacro send-to (agent form)
+  "send a message that's sent first to the server, then bounced to the agent, to be evaled"
+  `(send (uni-send-string (get-bsd-stream ,agent) (convert ,form))))
 
 (defun run-monitor ()
   (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9558))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
-    (with-pandoric (monitor-bsd-stream) #'send-Fn
-      (setf monitor-bsd-stream bsd-stream))
+    (setf *monitor-bsd-stream* bsd-stream)
     (while (socket-active-p bsd-socket)
-	       
+      
       (handler-case (format t "> ~a~%" (eval (read)))
 	(error (condition) (format t "~a~%" condition)))
-
+      
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
 	(format t "received on ~a:~a: ~a~%" host port line)
 	(when (string-equal line "[QUIT]")
-	  (uni-send-string bsd-stream (format nil "[QUIT]~%"))
+	  (uni-send-string bsd-stream "[QUIT]")
 	  (sb-bsd-sockets::close bsd-stream)
 	  (sb-bsd-sockets:socket-close bsd-socket))))))
   
 (defun run-display ()
   (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
-    (uni-send-string bsd-stream (format nil "(print-agents)~%"))
+    (uni-send-string bsd-stream "(print-agents)")
     (while (socket-active-p bsd-socket)
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
 	(format t "received on ~a:~a: ~a~%" host port line)
 	(dotimes (i 10)
-	  (uni-send-string bsd-stream (format nil "RPM-displayed=~a~%" (random 10)))
-	  (uni-send-string bsd-stream (format nil "RPM-measured=~a~%" (random 10))))
+	  (uni-send-string bsd-stream (format nil "RPM-displayed=~a" (random 10)))
+	  (uni-send-string bsd-stream (format nil "RPM-measured=~a" (random 10))))
 	(when (string-equal line "[QUIT]")
-	  (uni-send-string bsd-stream (format nil "[QUIT]~%"))
+	  (uni-send-string bsd-stream "[QUIT]")
 	  (sb-bsd-sockets::close bsd-stream)
 	  (sb-bsd-sockets:socket-close bsd-socket))))))
 

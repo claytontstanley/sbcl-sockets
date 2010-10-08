@@ -263,6 +263,22 @@
     (check-trim-data (1) 10 (1))
     (check-trim-data (9 99 11111 1 12) 11 (9 11 11 1 11))
     (check-trim-data (9 10 11 10 9 8 7 12) 10 (9 10 10 10 9 8 7 10))))
+
+(deftest test-linear-regression ()
+  (macrolet ((within-tolerance (val1 val2 tol)
+	       `(> ,tol (abs (- ,val1 ,val2))))
+	     (check-linear-regression (xs ys slope intercept)
+	       `(progn
+		  (multiple-value-bind (m b) (linear-regression (list ,@xs) (list ,@ys))
+		    (check (within-tolerance m ,slope .0001))
+		    (check (within-tolerance b ,intercept .0001))))))
+    (check-linear-regression (1 2 3) (1 2 3) 1 0)
+    (check-linear-regression (1 2 3) (4 4 4) 0 4)
+    (check-linear-regression (3 2 1) (1 2 3) -1 4)
+    (errors-p
+     (check-linear-regression (1 1 1) (1 2 3) 0 0))))
+	       
+    
 		 
 	       
 (defun test-server ()
@@ -283,5 +299,6 @@
 	  (test-kill-agent)
 	  (test-kill-agents)
 	  (test-trim-data)
+	  (test-linear-regression)
 	  )))
     (format t "~%overall: ~:[FAIL~;pass~]~%" result)))

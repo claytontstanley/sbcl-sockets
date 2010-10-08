@@ -16,15 +16,16 @@
 ;;; call uni-make-socket on the client
 (defmacro uni-prepare-socket (host port)
   `(let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
-	 (host ,host)
+	 (host ,(symbol-name host))
 	 (port ,port))
      (setf (sb-bsd-sockets:non-blocking-mode sock) t)
      (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
      (sb-bsd-sockets::socket-listen sock 5)
-     (plambda () (sock host port)
-       (aif (sb-bsd-sockets::socket-accept sock)
-	    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)
-	    (values nil nil)))))
+     (define-job :name ,(symb `connect-socket- host `- port) 
+       :Fn (plambda () (sock host port)
+	     (aif (sb-bsd-sockets::socket-accept sock) 
+		  (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
+       :quota 60000))) ;a quota this high makes this plambda fire ~ once every few seconds
 
 ;;; uni-run-process
 ;;; This function takes 2 parameters.  The first is a string which will be
@@ -79,7 +80,9 @@
 
 (defun uni-send-string (socket string)
   (uni-without-interrupts 
-   (write-string string socket)
+   (write-string 
+    (format nil "~a~%" (string-right-trim (list #\Newline #\Return #\LineFeed) string))
+    socket)
    (finish-output socket)))
 
 
