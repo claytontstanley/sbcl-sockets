@@ -19,7 +19,7 @@
   `(* ,g!x ,g!x))
 
 (defmacro attempt (form &key (on-error `(format t "error: ~a~%" condition)))
-  "anaphoric macro for attemping to evaluate form; default is to print error to screen if error"
+  "anaphoric macro for attemping to evaluate form; default is to print error to screen on error"
   `(handler-case ,form (error (condition) ,on-error)))
 
 (defmacro with-gensyms ((&rest names) &body body)
@@ -43,8 +43,8 @@
 (defmacro! trim-data (data N)
   "trims the ends off all channels in the data hash table, so that no channel is > N in length"
   `(loop for ,g!channel being the hash-values of ,data
-      do (let ((Ln (+ 1 (length ,g!channel)))) 
-	   (while (> (decf Ln) ,N)
+      do (let ((,g!Ln (+ 1 (length ,g!channel)))) 
+	   (while (> (decf ,g!Ln) ,N)
 	     (setf ,g!channel (nbutlast ,g!channel))))))
 
 (defmacro socket-active-p (socket)
