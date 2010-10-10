@@ -25,7 +25,7 @@
        :Fn (plambda () (sock host port)
 	     (aif (sb-bsd-sockets::socket-accept sock) 
 		  (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
-       :quota 60000))) ;a quota this high makes this plambda fire ~ once every few seconds
+       :quota (* *updates-per-second* 1)))) ;have this plambda fire ~ once every second
 
 ;;; uni-run-process
 ;;; This function takes 2 parameters.  The first is a string which will be

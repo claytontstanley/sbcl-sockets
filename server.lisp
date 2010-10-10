@@ -351,6 +351,8 @@
 
 ;dynamically scoped variable that stores the monitor's bsd-stream
 (defvar *monitor-bsd-stream*)
+;stores the refresh rate of the server
+(defvar *updates-per-second* 60) 
   
 (defmacro send (form)
   "send is a shorthand for the monitor to send a message to the server;
@@ -365,20 +367,32 @@
   "send a message that's sent first to the server, then bounced to the agent, to be evaled"
   `(send (uni-send-string (get-bsd-stream ,agent) (convert ,form))))
 
+(defmacro! with-time (time &body body)
+  "executes body in 'time' seconds; time is intended to be longer than it should take to execute body"
+  `(let* ((,g!start (get-internal-real-time))
+	  (,g!finish (+ (* ,time internal-time-units-per-second) ,g!start))
+	  (,g!time-to-sleep))
+     ,@body
+     (setf ,g!time-to-sleep (/ (- ,g!finish (get-internal-real-time)) internal-time-units-per-second))
+     (if (< ,g!time-to-sleep 0)
+	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
+	 (sleep ,g!time-to-sleep))))
+
 (defun run-monitor ()
   "connects a monitor agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9558))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (setf *monitor-bsd-stream* bsd-stream)
     (while (socket-active-p bsd-socket)
-      (if (listen) (attempt (eval (read))))
-      (while (and (socket-active-p bsd-socket) (listen bsd-stream))
-	(setf line (read-line bsd-stream))
-	(format t "received on ~a:~a: ~a~%" host port line)
-	(when (string-equal line "[QUIT]")
-	  (uni-send-string bsd-stream "[QUIT]")
-	  (sb-bsd-sockets::close bsd-stream)
-	  (sb-bsd-sockets:socket-close bsd-socket))))))
+      (with-time (/ 1 *updates-per-second*)
+	(if (listen) (attempt (eval (read))))
+	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
+	  (setf line (read-line bsd-stream))
+	  (format t "received on ~a:~a: ~a~%" host port line)
+	  (when (string-equal line "[QUIT]")
+	    (uni-send-string bsd-stream "[QUIT]")
+	    (sb-bsd-sockets::close bsd-stream)
+	    (sb-bsd-sockets:socket-close bsd-socket)))))))
   
 (defun run-display ()
   "connects a display agent to the server"
@@ -386,16 +400,17 @@
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (uni-send-string bsd-stream "(print-agents)")
     (while (socket-active-p bsd-socket)
-      (while (and (socket-active-p bsd-socket) (listen bsd-stream))
-	(setf line (read-line bsd-stream))
-	(format t "received on ~a:~a: ~a~%" host port line)
-	(dotimes (i 10)
-	  (uni-send-string bsd-stream (format nil "RPM-displayed=~a" (random 10)))
-	  (uni-send-string bsd-stream (format nil "RPM-measured=~a" (random 10))))
-	(when (string-equal line "[QUIT]")
-	  (uni-send-string bsd-stream "[QUIT]")
-	  (sb-bsd-sockets::close bsd-stream)
-	  (sb-bsd-sockets:socket-close bsd-socket))))))
+      (with-time (/ 1 *updates-per-second*)
+	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
+	  (setf line (read-line bsd-stream))
+	  (format t "received on ~a:~a: ~a~%" host port line)
+	  (dotimes (i 10)
+	    (uni-send-string bsd-stream (format nil "RPM-displayed=~a" (random 10)))
+	    (uni-send-string bsd-stream (format nil "RPM-measured=~a" (random 10))))
+	  (when (string-equal line "[QUIT]")
+	    (uni-send-string bsd-stream "[QUIT]")
+	    (sb-bsd-sockets::close bsd-stream)
+	    (sb-bsd-sockets:socket-close bsd-socket)))))))
 
 ;(setf *break-on-signals* t)
        
@@ -447,9 +462,13 @@
   ;agents can be removed by evaling (kill-agent agent), or (kill-agents)
   ;currently, the monitor sends a "(kill-agents)" RPC message to the server, which
   ;clears all the agents, which then causes this while loop to exit
-  (time
-   (while (get-pandoric 'agents 'agents)
-     (update-agents))))
+  (while (get-pandoric 'agents 'agents)
+    (with-time (/ 1 *updates-per-second*) ;updating 60x/second
+      (update-agents))))
+
+
+
+	  
 
 
 
