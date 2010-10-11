@@ -134,7 +134,7 @@
 		   (setf bsd-stream nil)
 		   (setf bsd-socket nil))
 		  ((line2element line)
-		   (push (eval (read-from-string (cdr it))) (gethash (car it) data))
+		   (push (parse-float (cdr it)) (gethash (car it) data))
 		   (dolist (event (gethash (car it) events))
 		     (format t "evaluating event on ~a:~a: ~a~%" host port event)
 		     (attempt (funcall event))))
