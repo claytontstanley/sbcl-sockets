@@ -385,6 +385,13 @@
 (defvar *monitor-bsd-stream*)
 ;stores the refresh rate of the server
 (defvar *updates-per-second* 60) 
+
+(let ((i -1)
+      (average-headroom 0))
+  (defpun headroom (val) (i average-headroom)
+    (incf i)
+    (setf average-headroom 
+	  (/ (+ (* average-headroom i) val) (+ i 1)))))
   
 (defmacro send (form)
   "send is a shorthand for the monitor to send a message to the server;
@@ -399,6 +406,10 @@
   "send a message that's sent first to the server, then bounced to the agent, to be evaled"
   `(send (uni-send-string (get-bsd-stream ,agent) (convert ,form))))
 
+(defmacro send-string-to (agent str)
+  "sends string str to agent via server"
+  `(send (uni-send-string (get-bsd-stream ,agent) ,str)))
+
 (defmacro! with-time (time &body body)
   "executes body in 'time' seconds; time is intended to be longer than it should take to execute body"
   `(let* ((,g!start (get-internal-real-time))
@@ -406,6 +417,7 @@
 	  (,g!time-to-sleep))
      ,@body
      (setf ,g!time-to-sleep (/ (- ,g!finish (get-internal-real-time)) internal-time-units-per-second))
+     ;(headroom ,g!time-to-sleep)
      (if (< ,g!time-to-sleep 0)
 	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
 	 (sleep ,g!time-to-sleep))))
