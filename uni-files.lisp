@@ -23,8 +23,9 @@
      (sb-bsd-sockets::socket-listen sock 5)
      (define-job :name ,(symb `connect-socket- host `- port) 
        :Fn (plambda () (sock host port)
-	     (aif (sb-bsd-sockets::socket-accept sock) 
-		  (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
+	     (awhen (sb-bsd-sockets::socket-accept sock) 
+		    (format t "connecting~%")
+		    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
        :quota (* *updates-per-second* 1)))) ;have this plambda fire ~ once every second
 
 ;;; uni-run-process

@@ -40,12 +40,23 @@
     ;slope then intercept
     (values b a)))
 
-(defmacro! trim-data (data N)
+(defun parse-float (string) 
+  "Return a float read from string, and the index to the remainder of string." 
+  (multiple-value-bind (integer i) 
+      (parse-integer string :junk-allowed t)
+    (if (and (null integer) (eq i 0)) (setf integer 0))
+    (multiple-value-bind (fraction j)
+	(if (eq (length string) i)
+	    (values 0 i)
+	    (parse-integer string :start (+ i 1) :junk-allowed nil))
+      (values (float (+ integer (/ fraction (expt 10 (- j i 1))))) j))))
+
+(defun trim-data (data N)
   "trims the ends off all channels in the data hash table, so that no channel is > N in length"
-  `(loop for ,g!channel being the hash-values of ,data
-      do (let ((,g!Ln (+ 1 (length ,g!channel)))) 
-	   (while (> (decf ,g!Ln) ,N)
-	     (setf ,g!channel (nbutlast ,g!channel))))))
+  (loop for channel being the hash-values of data
+     do (let ((Ln (+ 1 (length channel)))) 
+	  (while (> (decf Ln) N)
+	    (setf channel (nbutlast channel))))))
 
 (defmacro socket-active-p (socket)
   `(and ,socket (sb-bsd-sockets:socket-open-p ,socket)))
@@ -337,10 +348,8 @@
 				   (aif (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw))
 					(push it (get-channel ,@calibrated-channel))))))
        ;add the job that calibrates the calibrated channel
-       (add-event :trigger-channel ,measured-channel
-		  :Fn ,Fn)
-       (add-event :trigger-channel ,displayed-channel
-		  :Fn ,Fn))))
+       (add-event :trigger-channel ,measured-channel :Fn ,Fn)
+       (add-event :trigger-channel ,displayed-channel :Fn ,Fn))))
 
 (defmacro convert (form)
   "converts a form to a string that when (eval (read-from-string str)) returns the evaled form"
