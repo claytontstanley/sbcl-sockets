@@ -222,16 +222,17 @@
 		    (sort (mapcar #'symbol-name (remove-if
 						 (lambda (x) (equal x ',agent))
 						 (list ,@(mapcar (lambda (x) `',x) agents))))
-			  #'string<))))))
+			  #'string<)))
+		  (kill-agents))))
     (check-kill-agent (agent1 agent2 agent3) agent1)
     (check-kill-agent (agent1 agent2) agent2)
     (check-kill-agent (agent2) agent2)
-    (errors-p
-     (check-kill-agent (agent2) agent1))
-    (errors-p
-     (check-kill-agent () agent2))
-    (errors-p
-     (check-kill-agent (agent1 agent2) agent3))))
+    (check (errors-p (check-kill-agent (agent2) agent1)))
+    (kill-agents)
+    (check (errors-p (check-kill-agent () agent2)))
+    (kill-agents)
+    (check (errors-p (check-kill-agent (agent1 agent2) agent3)))
+    (kill-agents)))
 
 (deftest test-kill-agents ()
   (macrolet ((check-kill-agents (agents)
@@ -275,12 +276,24 @@
     (check-linear-regression (1 2 3) (1 2 3) 1 0)
     (check-linear-regression (1 2 3) (4 4 4) 0 4)
     (check-linear-regression (3 2 1) (1 2 3) -1 4)
-    (errors-p
-     (check-linear-regression (1 1 1) (1 2 3) 0 0))))
+    (check (errors-p (check-linear-regression (1 1 1) (1 2 3) 0 0)))))
+
+(deftest test-parse-float ()
+  (macrolet ((check-parse-float (str float)
+	       `(multiple-value-bind (val ind) (parse-float ,str)
+		  (check (equal val ,float))
+		  (check (equal (length ,str) ind)))))
+    (check-parse-float "121.1" 121.1)
+    (check-parse-float "1" 1.0)
+    (check-parse-float ".23" .23)
+    (check-parse-float "192" 192.0)
+    (check (errors-p (check-parse-float "192." 192.0)))
+    (check (errors-p (check-parse-float "192.a" 192.0)))
+    (check (errors-p (check-parse-float "19a.2" 192.0)))))
 	       
     
 		 
-	       
+	      
 (defun test-server ()
   (let ((result
 	 (runtests 
@@ -300,5 +313,6 @@
 	  (test-kill-agents)
 	  (test-trim-data)
 	  (test-linear-regression)
+	  (test-parse-float)
 	  )))
     (format t "~%overall: ~:[FAIL~;pass~]~%" result)))

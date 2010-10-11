@@ -1,3 +1,26 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;  -*- mode: LISP; Syntax: COMMON-LISP;  Base: 10 -*-
+;;; 
+;;; Author      : Clayton Stanley
+;;; Address     : Air Force Research Laboratory
+;;;             : Mesa, AZ 85212 USA
+;;;             : clayton.stanley@wpafb.af.mil
+;;;             : cstanley@cstanley.no-ip.biz
+;;; Filename    : server.lisp
+;;; Version     : 1.0
+;;; 
+;;; Description : A socket-based server; this implementation is not concurrent/threaded
+;;;             
+;;; Dependencies: Depends on letf.lisp
+;;;
+;;; Bugs        : ???
+;;;
+;;; ----- History -----
+;;;
+;;; 2010.10.11  : Creation.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;load some functions that make it easier to send/receive messages across a socket
 (load "uni-files.lisp")
 
@@ -49,7 +72,7 @@
 	(if (eq (length string) i)
 	    (values 0 i)
 	    (parse-integer string :start (+ i 1) :junk-allowed nil))
-      (values (float (+ integer (/ fraction (expt 10 (- j i 1))))) j))))
+      (values (coerce (+ integer (/ fraction (expt 10 (- j i 1)))) 'double-float) j))))
 
 (defun trim-data (data N)
   "trims the ends off all channels in the data hash table, so that no channel is > N in length"
