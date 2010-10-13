@@ -11,7 +11,7 @@
 ;;; 
 ;;; Description : A socket-based server; this implementation is not concurrent/threaded
 ;;;             
-;;; Dependencies: Depends on letf.lisp
+;;; Dependencies: requires that letf.lisp is loaded; loads uni-files.lisp
 ;;;
 ;;; Bugs        : ???
 ;;;
