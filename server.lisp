@@ -282,15 +282,15 @@
   "returns the events hash table inside the agent's socket"
   `(get-pandoric (get-socket ,agent) 'events))
 
-(defmacro get-channel (channel agent &key (N) (from `get-data))
+(defmacro get-channel (channel% agent &key (N) (from `get-data))
   "returns a channel (or subset of the channel) in the data/event hash table inside the agent's socket"
-  (setf channel `(gethash ,(symbol-name channel) (,from ,agent)))
-  (cond ((not N)
-	 channel)
-	((equal N 1)
-	 `(car ,channel))
-	(t
-	 `(subseq ,channel 0 (min ,N (length ,channel))))))
+  (let ((channel `(gethash ,(symbol-name channel%) (,from ,agent))))
+    (cond ((not N)
+	   channel)
+	  ((equal N 1)
+	   `(car ,channel))
+	  (t
+	   `(subseq ,channel 0 (min ,N (length ,channel)))))))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
   "adds an event Fn to the trigger-channel"
@@ -321,14 +321,14 @@
 				   (aif ,value
 					(send-output ,agent ,name it))))))
 
-(defmacro add-output-event (&key (agent) (name) (trigger-channel) (value))
+(defmacro add-output-event (&key (agent) (name%) (trigger-channel) (value%))
   "adds an output event to agent that sends 'value' through the socket when trigger-channel is updated"
-  (if (not name) (setf name (car trigger-channel)))
-  (if (not value) (setf value `(get-channel ,@trigger-channel :N 1)))
-  `(add-event :trigger-channel ,trigger-channel
-	      :Fn (lambda ()
-		    (aif ,value
-			 (send-output ,agent ,name it)))))
+  (let ((name (aif name% it (car trigger-channel)))
+	(value (aif value% it `(get-channel ,@trigger-channel :N 1))))
+    `(add-event :trigger-channel ,trigger-channel
+		:Fn (lambda ()
+		      (aif ,value
+			   (send-output ,agent ,name it))))))
 
 (defmacro add-channel (&key (agent) (name) (quota) (value))
   "adds channel to agent that evaluates value"
@@ -338,13 +338,13 @@
 				   (aif ,value
 					(push it (get-channel ,name ,agent)))))))
 
-(defmacro add-calibration (&key (slope-channel) (intercept-channel) (N 30)
+(defmacro add-calibration (&key (slope-channel%) (intercept-channel%) (N 30)
 			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel))
   "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and displayed channels"
   (let* (;if slope-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
-	 (slope-channel (aif slope-channel it (list (gensym "SLOPE") (second raw-channel))))
+	 (slope-channel (aif slope-channel% it (list (gensym "SLOPE") (second raw-channel))))
 	 ;if intercept-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
-	 (intercept-channel (aif intercept-channel it (list (gensym "INTERCEPT") (second raw-channel))))
+	 (intercept-channel (aif intercept-channel% it (list (gensym "INTERCEPT") (second raw-channel))))
 	 (displayed (car displayed-channel))
 	 (measured (car measured-channel))
 	 (slope (car slope-channel))
