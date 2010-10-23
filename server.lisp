@@ -308,6 +308,17 @@
   "same as with-channels, but use when you only want to access a single channel"
   `(with-channels (,channel) ,@body))
 
+(defmacro let-channels (channels &body body)
+  "allows read access to each channel in the 'body forms; access using the channel's name"
+  `(let ,(mapcar (lambda (channel)
+		   `(,(car channel) (get-channel ,@channel)))
+		 channels)
+     ,@body))
+
+(defmacro let-channel (channel &body body)
+  "same as let-channels, but use when you only want read access to a single channel"
+  `(let-channels (,channel) ,@body))
+
 (defmacro send-output (agent key val)
   "sends key=val~% to agent's stream"
   `(uni-send-string (get-bsd-stream ,agent)
@@ -337,7 +348,7 @@
 			     :Fn (lambda ()
 				   (aif ,value
 					(push it (get-channel ,name ,agent)))))))
-
+  
 (defmacro add-calibration (&key (slope-channel%) (intercept-channel%) (N 30)
 			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel))
   "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and displayed channels"
@@ -350,11 +361,12 @@
 	 (slope (car slope-channel))
 	 (intercept (car intercept-channel))
 	 (raw (car raw-channel))
+	 (calibrated (car calibrated-channel))
 	 (Fn (gensym)))
     `(let ((,Fn (define-job :name ,(symb `calibration-for- calibrated-channel)
 		  :Fn (lambda ()
-			(with-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
-					(,@slope-channel :N 1) (,@intercept-channel :N 1))
+			(let-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
+				       (,@slope-channel :N 1) (,@intercept-channel :N 1))
 			  ;we need to convert the displayed channel back to raw data scale
 			  (if (and ,intercept ,slope)
 			      (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
@@ -367,9 +379,8 @@
        ;add an event that; whenever the raw-channel receives a value, the calibrated value from the raw-channel will be pushed
        ;on the calibrated-channel
        (add-event :trigger-channel ,raw-channel
-		  :Fn (lambda () (with-channels ((,@raw-channel :N 1) (,@intercept-channel :N 1) (,@slope-channel :N 1))
-				   (aif (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw))
-					(push it (get-channel ,@calibrated-channel))))))
+		  :Fn (lambda () (with-channels ((,@raw-channel :N 1) (,@intercept-channel :N 1) (,@slope-channel :N 1) (,@calibrated-channel))
+				   (push (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw)) ,calibrated))))
        ;add the job that calibrates the calibrated channel
        (add-event :trigger-channel ,measured-channel :Fn ,Fn)
        (add-event :trigger-channel ,displayed-channel :Fn ,Fn))))
