@@ -296,12 +296,12 @@
   "adds an event Fn to the trigger-channel"
   `(push-to-end ,Fn (get-channel ,@trigger-channel :from get-events)))
 
-;TODO; can you allow 'write' access as well? that would be pretty sweet
 (defmacro with-channels (channels &body body)
-  "allows read access to each channel in the 'body forms; access using the channel's name"
-  `(let ,(mapcar (lambda (channel)
-		   `(,(car channel) (get-channel ,@channel)))
-		 channels)
+  "allows read/write access to each channel in the 'body forms; access using the channel's name"
+  `(symbol-macrolet
+       ,(mapcar (lambda (channel) 
+		  `(,(car channel) (get-channel ,@channel)))
+		channels)
      ,@body))
 
 (defmacro with-channel (channel &body body)
