@@ -1,0 +1,2 @@
+file2load=server.lisp
+albumBuilder=#'run-daq

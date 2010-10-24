@@ -76,10 +76,11 @@
 
 (defun trim-data (data N)
   "trims the ends off all channels in the data hash table, so that no channel is > N in length"
-  (loop for channel being the hash-values of data
-     do (let ((Ln (+ 1 (length channel)))) 
-	  (while (> (decf Ln) N)
-	    (setf channel (nbutlast channel))))))
+  (loop for channel being the hash-values of data do 
+       (when (listp channel)
+	 (let ((Ln (+ 1 (length channel)))) 
+	   (while (> (decf Ln) N)
+	     (setf channel (nbutlast channel)))))))
 
 (defmacro socket-active-p (socket)
   `(and ,socket (sb-bsd-sockets:socket-open-p ,socket)))
@@ -100,6 +101,19 @@
 	     (setf quot 0)
 	     (attempt (funcall Fn)))))))
 
+(defun gethash&mon (key hash)
+  (multiple-value-bind (x y) (gethash key hash)
+    (values x y)))
+
+(defsetf gethash&mon (key hash) (val)
+  `(progn
+     (setf (gethash ,key ,hash) ,val)
+     (aif (gethash "events" ,hash)
+	  (dolist (event (gethash ,key it))
+	    (format t "evaluating event: ~a~%" event)
+	    (attempt (funcall event))))
+     ,val))
+
 (defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
   "defines a socket that is a pandoric function
    the function has an inner loop that processes all lines currently on the stream;
@@ -111,14 +125,14 @@
 	  (bsd-socket ,bsd-socket)
           ;data storing any received messages
 	  (data (make-hash-table :test #'equalp))
-	  ;data storing any triggered events
-	  (events (make-hash-table :test #'equalp))
           ;maximum length of a channel in the data hash table
 	  (host ,(aif host (symbol-name it)))
 	  (port ,port)
 	  (N 100)
 	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket ,host ,port))))
-     (plambda () (bsd-stream bsd-socket data events N uni-prepare-socket-Fn host port)
+     ;data storing any triggered events
+     (setf (gethash "events" data) (make-hash-table :test #'equalp))
+     (plambda () (bsd-stream bsd-socket data N uni-prepare-socket-Fn host port)
        ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
        (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
 	   (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
@@ -134,10 +148,7 @@
 		   (setf bsd-stream nil)
 		   (setf bsd-socket nil))
 		  ((line2element line)
-		   (push (parse-float (cdr it)) (gethash (car it) data))
-		   (dolist (event (gethash (car it) events))
-		     (format t "evaluating event on ~a:~a: ~a~%" host port event)
-		     (attempt (funcall event))))
+		   (push (parse-float (cdr it)) (gethash&mon (car it) data)))
 		  (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
 			 (val))
@@ -278,19 +289,19 @@
   "returns the data hash table inside the agent's socket"
   `(get-pandoric (get-socket ,agent) 'data))
 
-(defmacro get-events (agent)
-  "returns the events hash table inside the agent's socket"
-  `(get-pandoric (get-socket ,agent) 'events))
-
 (defmacro get-channel (channel% agent &key (N) (from `get-data))
   "returns a channel (or subset of the channel) in the data/event hash table inside the agent's socket"
-  (let ((channel `(gethash ,(symbol-name channel%) (,from ,agent))))
+  (let ((channel `(gethash&mon ,(symbol-name channel%) (,from ,agent))))
     (cond ((not N)
 	   channel)
 	  ((equal N 1)
 	   `(car ,channel))
 	  (t
 	   `(subseq ,channel 0 (min ,N (length ,channel)))))))
+
+(defmacro get-events (agent)
+  "returns the events hash table inside the agent's socket"
+  `(get-channel events ,agent))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
   "adds an event Fn to the trigger-channel"
@@ -324,13 +335,13 @@
   `(uni-send-string (get-bsd-stream ,agent)
 		    (format nil "~a=~a" ,(symbol-name key) ,val)))
   
-(defmacro add-output (&key (agent) (name) (quota) (value))
-  "adds an output to agent that sends 'value' through the socket"
-  `(add-job :agent ,agent
-	    :job (define-job :name ,name ,@(aif quota (list :quota it))
-			     :Fn (lambda ()
-				   (aif ,value
-					(send-output ,agent ,name it))))))
+;(defmacro add-output (&key (agent) (name) (quota) (value))
+;  "adds an output to agent that sends 'value' through the socket"
+;  `(add-job :agent ,agent
+;	    :job (define-job :name ,name ,@(aif quota (list :quota it))
+;			     :Fn (lambda ()
+;				   (aif ,value
+;					(send-output ,agent ,name it))))))
 
 (defmacro add-output-event (&key (agent) (name%) (trigger-channel) (value%))
   "adds an output event to agent that sends 'value' through the socket when trigger-channel is updated"
@@ -341,13 +352,13 @@
 		      (aif ,value
 			   (send-output ,agent ,name it))))))
 
-(defmacro add-channel (&key (agent) (name) (quota) (value))
-  "adds channel to agent that evaluates value"
-  `(add-job :agent ,agent
-	    :job (define-job :name ,name ,@(aif quota (list :quota it))
-			     :Fn (lambda ()
-				   (aif ,value
-					(push it (get-channel ,name ,agent)))))))
+;(defmacro add-channel (&key (agent) (name) (quota) (value))
+;  "adds channel to agent that evaluates value"
+;  `(add-job :agent ,agent
+;	    :job (define-job :name ,name ,@(aif quota (list :quota it))
+;			     :Fn (lambda ()
+;				   (aif ,value
+;					(push it (get-channel ,name ,agent)))))))
   
 (defmacro add-calibration (&key (slope-channel%) (intercept-channel%) (N 30)
 			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel))
@@ -368,11 +379,15 @@
 			(let-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
 				       (,@slope-channel :N 1) (,@intercept-channel :N 1))
 			  ;we need to convert the displayed channel back to raw data scale
+			  ;(format t "displayed before lambda: ~a~%" ,displayed)
 			  (if (and ,intercept ,slope)
 			      (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
 			  ;then grab the updated slope and intercept, and push them on to the slope/intercept channel
 			  (when (> (length ,displayed) 5)
-			    (multiple-value-setq (,slope ,intercept) (linear-regression ,measured ,displayed))
+			    ;(format t "displayed: ~a~%" ,displayed)
+			    ;(format t "measured: ~a~%" ,measured)
+			    (multiple-value-setq (,slope ,intercept) (linear-regression ,displayed ,measured))
+			    ;(format t "slope/intercept: ~a/~a~%" ,slope ,intercept)
 			    (push ,slope (get-channel ,@slope-channel))
 			    (push ,intercept (get-channel ,@intercept-channel)))))
 		  :quota 2))) ;quota is 2 here b/c this job should only fire after both the measured and displayed values are sent back       
@@ -451,21 +466,38 @@
   
 (defun run-display ()
   "connects a display agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557))
+  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557) (hsh (make-hash-table :test #'equalp)))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (uni-send-string bsd-stream "(print-agents)")
     (while (socket-active-p bsd-socket)
       (with-time (/ 1 *updates-per-second*)
 	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
+	  (trim-data hsh 200)
 	  (setf line (read-line bsd-stream))
 	  (format t "received on ~a:~a: ~a~%" host port line)
-	  (dotimes (i 10)
-	    (uni-send-string bsd-stream (format nil "RPM-displayed=~a" (random 10)))
-	    (uni-send-string bsd-stream (format nil "RPM-measured=~a" (random 10))))
+	  (aif (line2element line)
+	       (if (equalp (car it) "rpm-raw")
+		   (uni-send-string bsd-stream (format nil "rpm-measured=~a" (cdr it)))
+		   (uni-send-string bsd-stream (format nil "rpm-displayed=~a" (+ (parse-float (cdr it)) 0 #|(- (/ (random 1000) 10000) .05)|#)))))
 	  (when (string-equal line "[QUIT]")
 	    (uni-send-string bsd-stream "[QUIT]")
 	    (sb-bsd-sockets::close bsd-stream)
 	    (sb-bsd-sockets:socket-close bsd-socket)))))))
+
+(defun run-daq ()
+  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9556))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
+    (while (socket-active-p bsd-socket)
+      (dotimes (i 10)
+	(with-time 1 ;(/ 1 *updates-per-second*)
+	  (uni-send-string bsd-stream (format nil "RPM-Raw=~a" i))))
+      (while (and (socket-active-p bsd-socket) (listen bsd-stream))
+	(setf line (read-line bsd-stream))
+	(format t "received on ~a:~a: ~a~%" host port line)
+	(when (string-equal line "[QUIT]")
+	  (uni-send-string bsd-stream "[QUIT]")
+	  (sb-bsd-sockets::close bsd-stream)
+	  (sb-bsd-sockets:socket-close bsd-socket))))))
 
 ;(setf *break-on-signals* t)
        
@@ -473,16 +505,9 @@
   "top-level function that runs the lisp backend server"
 
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
-  ;mocking up some data in here for now, until we can actually hook up the DAQ to the server
-  (define-agent :name DAQ 
-    :socket (make-socket :bsd-stream 
-			 (make-string-input-stream
-			  (with-output-to-string (out)
-			    (format out "RPM-Raw=5~%") ;typical look of a single line in the DAQ stream
-			    (format out "RPM-Raw=4~%")
-			    (format out "(print \"hello world\")~%") ;but, you can also send lisp code to get evaled in place
-			    (format out "[QUIT]~%") ;and, when you want to close the channel, just send this string
-			    ))))
+  (define-agent :name DAQ
+    :host 127.0.0.1
+    :port 9556)
 
   ;agent in charge of all jobs concerning the display (that is, the lisp->OSX bridge)
   (define-agent :name display
