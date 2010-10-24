@@ -336,10 +336,10 @@
   "same as let-channels, but use when you only want read access to a single channel"
   `(let-channels (,channel) ,@body))
 
-(defmacro send-output (agent key val)
+(defmacro send-output (channel agent val)
   "sends key=val~% to agent's stream"
   `(uni-send-string (get-bsd-stream ,agent)
-		    (format nil "~a=~a" ,(symbol-name key) ,val)))
+		    (format nil "~a=~a" ,(symbol-name channel) ,val)))
   
 ;(defmacro add-output (&key (agent) (name) (quota) (value))
 ;  "adds an output to agent that sends 'value' through the socket"
@@ -347,16 +347,15 @@
 ;	    :job (define-job :name ,name ,@(aif quota (list :quota it))
 ;			     :Fn (lambda ()
 ;				   (aif ,value
-;					(send-output ,agent ,name it))))))
+;					(send-output ,name ,agent it))))))
 
-(defmacro add-output-event (&key (agent) (name%) (trigger-channel) (value%))
+(defmacro add-output-event (&key (output-channel) (trigger-channel) (value%))
   "adds an output event to agent that sends 'value' through the socket when trigger-channel is updated"
-  (let ((name (aif name% it (car trigger-channel)))
-	(value (aif value% it `(get-channel ,@trigger-channel :N 1))))
+  (let ((value (aif value% it `(get-channel ,@trigger-channel :N 1))))
     `(add-event :trigger-channel ,trigger-channel
 		:Fn (lambda ()
 		      (aif ,value
-			   (send-output ,agent ,name it))))))
+			   (send-output ,@output-channel it))))))
 
 ;(defmacro add-channel (&key (agent) (name) (quota) (value))
 ;  "adds channel to agent that evaluates value"
@@ -534,11 +533,11 @@
 		   :raw-channel (RPM-raw DAQ))
     
   ;send the calibrated rpm signal to the display
-  (add-output-event :agent display 
+  (add-output-event :output-channel (RPM display) 
 		    :trigger-channel (RPM DAQ))
   
   ;send the raw rpm signal to the display as well
-  (add-output-event :agent display
+  (add-output-event :output-channel (RPM-Raw display)
 		    :trigger-channel (RPM-Raw DAQ))
   
   ;display all agents and their jobs that will be called each time 'update-call' is called
