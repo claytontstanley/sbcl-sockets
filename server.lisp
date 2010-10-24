@@ -327,9 +327,10 @@
 
 (defmacro let-channels (channels &body body)
   "allows read access to each channel in the 'body forms; access using the channel's name"
-  `(let ,(mapcar (lambda (channel)
-		   `(,(car channel) (get-channel ,@channel)))
-		 channels)
+  `(let 
+       ,(mapcar (lambda (channel)
+		  `(,(car channel) (get-channel ,@channel)))
+		channels)
      ,@body))
 
 (defmacro let-channel (channel &body body)
@@ -490,6 +491,7 @@
 	    (sb-bsd-sockets:socket-close bsd-socket)))))))
 
 (defun run-daq ()
+  "connects a daq agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9556))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
