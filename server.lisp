@@ -101,13 +101,19 @@
 	     (setf quot 0)
 	     (attempt (funcall Fn)))))))
 
-(defun gethash&mon (key hash)
+(defun gethash-and-trigger (key hash)
+  "alias for gethash; used to tweak the setf function so that events are triggered when the hash table is updated"
   (multiple-value-bind (x y) (gethash key hash)
     (values x y)))
 
-(defsetf gethash&mon (key hash) (val)
+(defsetf gethash-and-trigger (key hash) (val)
+  "works just like the gethash setf method, except that all events associated with the key of the hash table being changed will also be executed"
   `(progn
+     ;update the hash table (analogous to the gethash setf method)
      (setf (gethash ,key ,hash) ,val)
+     ;and... grab the event hash table, and eval all events associated with the key being updated
+     ;if these events update the hash table, then events associated with that update will also be triggered
+     ;and so on...
      (aif (gethash "events" ,hash)
 	  (dolist (event (gethash ,key it))
 	    (format t "evaluating event: ~a~%" event)
@@ -148,7 +154,7 @@
 		   (setf bsd-stream nil)
 		   (setf bsd-socket nil))
 		  ((line2element line)
-		   (push (parse-float (cdr it)) (gethash&mon (car it) data)))
+		   (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 		  (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
 			 (val))
@@ -291,7 +297,7 @@
 
 (defmacro get-channel (channel% agent &key (N) (from `get-data))
   "returns a channel (or subset of the channel) in the data/event hash table inside the agent's socket"
-  (let ((channel `(gethash&mon ,(symbol-name channel%) (,from ,agent))))
+  (let ((channel `(gethash-and-trigger ,(symbol-name channel%) (,from ,agent))))
     (cond ((not N)
 	   channel)
 	  ((equal N 1)
