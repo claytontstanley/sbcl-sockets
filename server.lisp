@@ -102,12 +102,12 @@
 	     (attempt (funcall Fn)))))))
 
 (defun gethash-and-trigger (key hash)
-  "alias for gethash; used to tweak the setf function so that events are triggered when the hash table is updated"
+  "alias for gethash; used to tweak the setf gethash function so that events are triggered when the hash table is updated"
   (multiple-value-bind (x y) (gethash key hash)
     (values x y)))
 
 (defsetf gethash-and-trigger (key hash) (val)
-  "works just like the gethash setf method, except that all events associated with the key of the hash table being changed will also be executed"
+  "works just like the setf gethash method, except that all events associated with the key of the hash table being changed will also be executed"
   `(progn
      ;update the hash table (analogous to the gethash setf method)
      (setf (gethash ,key ,hash) ,val)
