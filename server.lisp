@@ -115,9 +115,10 @@
      ;if these events update the hash table, then events associated with that update will also be triggered
      ;and so on...
      (aif (gethash "events" ,hash)
-	  (dolist (event (gethash ,key it))
-	    (format t "evaluating event: ~a~%" event)
-	    (attempt (funcall event))))
+	  (with-pandoric (host port) (gethash "socket" ,hash)
+	    (dolist (event (gethash ,key it))
+	      (format t "evaluating event on ~a:~a: ~a~%" host port event)
+	      (attempt (funcall event)))))
      ,val))
 
 (defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
@@ -138,35 +139,36 @@
 	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket ,host ,port))))
      ;data storing any triggered events
      (setf (gethash "events" data) (make-hash-table :test #'equalp))
-     (plambda () (bsd-stream bsd-socket data N uni-prepare-socket-Fn host port)
-       ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
-       (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
-	   (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
-       (trim-data data N)
-       (let ((line))
-	 ;update all of the raw data
-	 (while (ignore-errors (listen bsd-stream))
-	   (setf line (uni-socket-read-line bsd-stream))
-	   (format t "received on ~a:~a: ~a~%" host port line)
-	   (acond ((string-equal line "[QUIT]")
-		   (if bsd-stream (sb-bsd-sockets::close bsd-stream))
-		   (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
-		   (setf bsd-stream nil)
-		   (setf bsd-socket nil))
-		  ((line2element line)
-		   (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
-		  (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
-		   (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
-			 (val))
-		     (attempt (progn
-				(with-output-to-string (*standard-output* fstr)
-				  (with-output-to-string (*error-output* fstr)
-				    (setf val (eval (read-from-string line)))))
-				(setf fstr (format nil "~a~%~a" fstr val)))
-			      :on-error (setf fstr (format nil "~a~%error: ~a" fstr condition)))
-		     (format t "~a~%" fstr)
-		     ;if the caller's socket is still active, return the output to the caller
-		     (attempt (uni-send-string bsd-stream fstr))))))))))
+     (setf (gethash "socket" data)
+	   (plambda () (bsd-stream bsd-socket data N uni-prepare-socket-Fn host port)
+             ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
+	     (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
+		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
+	     (trim-data data N)
+	     (let ((line))
+	       ;update all of the raw data
+	       (while (ignore-errors (listen bsd-stream))
+		 (setf line (uni-socket-read-line bsd-stream))
+		 (format t "received on ~a:~a: ~a~%" host port line)
+		 (acond ((string-equal line "[QUIT]")
+			 (if bsd-stream (sb-bsd-sockets::close bsd-stream))
+			 (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
+			 (setf bsd-stream nil)
+			 (setf bsd-socket nil))
+			((line2element line)
+			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
+			(t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
+			 (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
+			       (val))
+			   (attempt (progn
+				      (with-output-to-string (*standard-output* fstr)
+					(with-output-to-string (*error-output* fstr)
+					  (setf val (eval (read-from-string line)))))
+				      (setf fstr (format nil "~a~%~a" fstr val)))
+				    :on-error (setf fstr (format nil "~a~%error: ~a" fstr condition)))
+			   (format t "~a~%" fstr)
+		           ;if the caller's socket is still active, return the output to the caller
+			   (attempt (uni-send-string bsd-stream fstr)))))))))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
