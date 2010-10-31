@@ -1,11 +1,11 @@
 
-all: display
+all: server
 
 
 monitor:
 	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil monitor-config.txt nil
 
-server:
+server: compile
 	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil server-config.txt nil
 
 compile:
