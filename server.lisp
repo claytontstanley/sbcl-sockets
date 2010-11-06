@@ -122,6 +122,7 @@
      ,val))
 
 (defmacro with-outputs-to-string (args &body body)
+  "works like with-output-to-string, except that you can set/return a string bound to multiple streams"
   (destructuring-bind (vars &rest rest) args
     (if vars
 	`(with-output-to-string (,(car vars) ,@rest)
