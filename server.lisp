@@ -121,6 +121,14 @@
 	      (attempt (funcall event)))))
      ,val))
 
+(defmacro with-outputs-to-string (args &body body)
+  (destructuring-bind (vars &rest rest) args
+    (if vars
+	`(with-output-to-string (,(car vars) ,@rest)
+	   (with-outputs-to-string (,(cdr vars) ,@rest) ,@body))
+	`(progn
+	   ,@body))))
+
 (defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
   "defines a socket that is a pandoric function
    the function has an inner loop that processes all lines currently on the stream;
@@ -161,9 +169,8 @@
 			 (let ((fstr (make-array '(0) :element-type 'character :fill-pointer 0 :adjustable t))
 			       (val))
 			   (attempt (progn
-				      (with-output-to-string (*standard-output* fstr)
-					(with-output-to-string (*error-output* fstr)
-					  (setf val (eval (read-from-string line)))))
+				      (with-outputs-to-string ((*standard-output* *error-output*) fstr)
+					(setf val (eval (read-from-string line))))
 				      (setf fstr (format nil "~a~%~a" fstr val)))
 				    :on-error (setf fstr (format nil "~a~%error: ~a" fstr condition)))
 			   (format t "~a~%" fstr)
