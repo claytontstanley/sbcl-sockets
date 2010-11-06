@@ -50,6 +50,15 @@
   `(let ,(loop for n in names collect `(,n (gensym)))
      ,@body))
 
+(defmacro with-outputs-to-string (args &body body)
+  "works like with-output-to-string, except that you can set/return a string bound to multiple streams"
+  (destructuring-bind (vars &rest rest) args
+    (if vars
+	`(with-output-to-string (,(car vars) ,@rest)
+	   (with-outputs-to-string (,(cdr vars) ,@rest) ,@body))
+	`(progn
+	   ,@body))))
+
 (defun linear-regression (xs ys)
   "returns the best-fitting slope & intercept for the x,y points"
   (let* ((x-bar (mean xs))
@@ -120,15 +129,6 @@
 	      (format t "evaluating event on ~a:~a: ~a~%" host port event)
 	      (attempt (funcall event)))))
      ,val))
-
-(defmacro with-outputs-to-string (args &body body)
-  "works like with-output-to-string, except that you can set/return a string bound to multiple streams"
-  (destructuring-bind (vars &rest rest) args
-    (if vars
-	`(with-output-to-string (,(car vars) ,@rest)
-	   (with-outputs-to-string (,(cdr vars) ,@rest) ,@body))
-	`(progn
-	   ,@body))))
 
 (defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
   "defines a socket that is a pandoric function
