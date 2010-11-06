@@ -158,11 +158,11 @@
 			((line2element line)
 			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 			(t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
-			 (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
+			 (let ((fstr (make-array '(0) :element-type 'character :fill-pointer 0 :adjustable t))
 			       (val))
 			   (attempt (progn
-				      (with-output-to-string (*standard-output* fstr :element-type 'base-char)
-					(with-output-to-string (*error-output* fstr :element-type 'base-char)
+				      (with-output-to-string (*standard-output* fstr)
+					(with-output-to-string (*error-output* fstr)
 					  (setf val (eval (read-from-string line)))))
 				      (setf fstr (format nil "~a~%~a" fstr val)))
 				    :on-error (setf fstr (format nil "~a~%error: ~a" fstr condition)))
