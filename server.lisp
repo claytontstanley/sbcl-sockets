@@ -158,7 +158,7 @@
 			((line2element line)
 			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 			(t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
-			 (let ((fstr (make-array '(0) :element-type 'base-char :fill-pointer 0 :adjustable t))
+			 (let ((fstr (make-array '(1) :element-type 'base-char :fill-pointer 0 :adjustable t :initial-contents '(#\a)))
 			       (val))
 			   (attempt (progn
 				      (with-output-to-string (*standard-output* fstr)
