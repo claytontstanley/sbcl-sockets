@@ -20,7 +20,6 @@
   ;add an event that creates a calibrated-channel from the raw-channel, using the discrepency between the measured-channel
   ;and displayed-channel to calibrate
   (add-calibration :measured-channel (rpm-measured display)
-		   :displayed-channel (rpm-displayed display)
 		   :calibrated-channel (RPM DAQ)
 		   :raw-channel (RPM-raw DAQ))
     

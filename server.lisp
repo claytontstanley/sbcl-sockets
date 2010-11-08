@@ -379,45 +379,40 @@
 ;				   (aif ,value
 ;					(push it (get-channel ,name ,agent)))))))
   
-(defmacro add-calibration (&key (slope-channel%) (intercept-channel%) (N 30)
-			  (measured-channel) (displayed-channel) (calibrated-channel) (raw-channel))
-  "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and displayed channels"
-  (let* (;if slope-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
-	 (slope-channel (aif slope-channel% it (list (gensym "SLOPE") (second raw-channel))))
-	 ;if intercept-channel name and agent not provided, place it on the agent from the raw channel, and give it a random name
-	 (intercept-channel (aif intercept-channel% it (list (gensym "INTERCEPT") (second raw-channel))))
-	 (displayed (car displayed-channel))
+(defmacro! add-calibration (&key (N 10) (measured-channel) (calibrated-channel) (raw-channel))
+  "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and raw-when-measured channels"
+  (let* (;place abstracted channels on the agent from the raw channel, and give them gensymed names
+	 (slope-channel (list (gensym "SLOPE") (second raw-channel)))
+	 (intercept-channel (list (gensym "INTERCEPT") (second raw-channel)))
+	 (raw-when-measured-channel (list (gensym "RAW-WHEN-MEASURED") (second raw-channel)))
+	 (raw-when-measured (car raw-when-measured-channel))
 	 (measured (car measured-channel))
 	 (slope (car slope-channel))
 	 (intercept (car intercept-channel))
 	 (raw (car raw-channel))
-	 (calibrated (car calibrated-channel))
-	 (Fn (gensym)))
-    `(let ((,Fn (define-job :name ,(symb `calibration-for- calibrated-channel)
-		  :Fn (lambda ()
-			(let-channels ((,@displayed-channel :N ,N) (,@measured-channel :N ,N)
-				       (,@slope-channel :N 1) (,@intercept-channel :N 1))
-			  ;we need to convert the displayed channel back to raw data scale
-			  ;(format t "displayed before lambda: ~a~%" ,displayed)
-			  (if (and ,intercept ,slope)
-			      (setf ,displayed (mapcar (lambda (y) (/ (- y ,intercept) ,slope)) ,displayed)))
-			  ;then grab the updated slope and intercept, and push them on to the slope/intercept channel
-			  (when (> (length ,displayed) 5)
-			    ;(format t "displayed: ~a~%" ,displayed)
-			    ;(format t "measured: ~a~%" ,measured)
-			    (multiple-value-setq (,slope ,intercept) (linear-regression ,displayed ,measured))
-			    ;(format t "slope/intercept: ~a/~a~%" ,slope ,intercept)
-			    (push ,slope (get-channel ,@slope-channel))
-			    (push ,intercept (get-channel ,@intercept-channel)))))
-		  :quota 2))) ;quota is 2 here b/c this job should only fire after both the measured and displayed values are sent back       
-       ;add an event that; whenever the raw-channel receives a value, the calibrated value from the raw-channel will be pushed
-       ;on the calibrated-channel
+	 (calibrated (car calibrated-channel)))
+    `(progn
+       ;add an event that pushes the calibrated value from the raw-channel on the calibrated-channel
        (add-event :trigger-channel ,raw-channel
 		  :Fn (lambda () (with-channels ((,@raw-channel :N 1) (,@intercept-channel :N 1) (,@slope-channel :N 1) (,@calibrated-channel))
 				   (push (+ (aif ,intercept it 0) (* (aif ,slope it 1) ,raw)) ,calibrated))))
-       ;add the job that calibrates the calibrated channel
-       (add-event :trigger-channel ,measured-channel :Fn ,Fn)
-       (add-event :trigger-channel ,displayed-channel :Fn ,Fn))))
+       ;add an event that saves the raw channel's current value when a measured value is sent back
+       (add-event :trigger-channel ,measured-channel 
+		  :Fn (lambda () (push (get-channel ,@raw-channel :N 1) 
+				       (get-channel ,@raw-when-measured-channel))))
+       ;add an event that calibrates the calibrated channel; will be triggered by the above event updating the raw-when-measured-channel
+       (add-event :trigger-channel ,raw-when-measured-channel 
+		  :Fn (lambda ()
+			(with-channels ((,@raw-when-measured-channel :N ,N) (,@measured-channel :N ,N)
+					,slope-channel ,intercept-channel)
+		          ;grab the updated slope and intercept, and push them on to the slope/intercept channel
+			  (when (> (length ,raw-when-measured) 5)
+		            (format t "raw-when-measured: ~a~%" ,raw-when-measured)
+		            (format t "measured: ~a~%" ,measured)
+			      (multiple-value-bind (,g!slope ,g!intercept) (linear-regression ,raw-when-measured ,measured)
+				(format t "slope/intercept: ~a/~a~%" ,g!slope ,g!intercept)
+				(push ,g!slope ,slope)
+				(push ,g!intercept ,intercept)))))))))
 
 (defmacro convert (form)
   "converts a form to a string that when (eval (read-from-string str)) returns the evaled form"
@@ -496,8 +491,7 @@
 	  (format t "received on ~a:~a: ~a~%" host port line)
 	  (aif (line2element line)
 	       (if (equalp (car it) "rpm-raw")
-		   (uni-send-string bsd-stream (format nil "rpm-measured=~a" (cdr it)))
-		   (uni-send-string bsd-stream (format nil "rpm-displayed=~a" (+ (parse-float (cdr it)) 0 #|(- (/ (random 1000) 10000) .05)|#)))))
+		   (uni-send-string bsd-stream (format nil "rpm-measured=~f" (+ (parse-float (cdr it)) 0 (- (/ (random 1000) 10000) .05))))))
 	  (when (string-equal line "[QUIT]")
 	    (uni-send-string bsd-stream "[QUIT]")
 	    (sb-bsd-sockets::close bsd-stream)
@@ -509,7 +503,7 @@
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
-	(with-time 1 ;(/ 1 *updates-per-second*)
+	(with-time 1 #|(/ 1 *updates-per-second*)|#
 	  (uni-send-string bsd-stream (format nil "RPM-Raw=~a" i))))
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
