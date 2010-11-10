@@ -154,7 +154,8 @@
 	     (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
 		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
 	     (trim-data data N)
-	     (finish-output bsd-stream)
+	     (uni-without-interrupts 
+	      (finish-output bsd-stream))
 	     (let ((line))
 	       ;update all of the raw data
 	       (while (ignore-errors (listen bsd-stream))
