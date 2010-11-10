@@ -153,12 +153,12 @@
              ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
 	     (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
 		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
-	     (trim-data data N)
 	     (uni-without-interrupts 
 	      (finish-output bsd-stream))
 	     (let ((line))
 	       ;update all of the raw data
 	       (while (ignore-errors (listen bsd-stream))
+		 (trim-data data N)
 		 (setf line (uni-socket-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
 		 (acond ((string-equal line "[QUIT]")
