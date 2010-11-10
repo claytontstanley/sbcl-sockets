@@ -285,6 +285,9 @@
        (setf stderr stderr-default))
      (terminal)))
 
+(define-symbol-macro term-res
+    (terminal-reset))
+
 (defmacro terminal-redirect (agent)
   "redirects all stdout/stderr output to the agent's bsd stream"
   `(progn
@@ -292,6 +295,9 @@
        (setf stdout (get-bsd-stream ,agent))
        (setf stderr (get-bsd-stream ,agent)))
      (terminal)))
+
+(define-symbol-macro term-red
+    (terminal-redirect monitor))
 
 ;defining function that prints an agent
 (let ((fun (lambda (agent)
