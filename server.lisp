@@ -129,7 +129,7 @@
 	      (format t "evaluating event on ~a:~a: ~a~%" host port event)
 	      (attempt (funcall event)))))
      ,val))
-
+  
 (defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
   "defines a socket that is a pandoric function
    the function has an inner loop that processes all lines currently on the stream;
@@ -154,6 +154,7 @@
 	     (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
 		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
 	     (trim-data data N)
+	     (finish-output bsd-stream)
 	     (let ((line))
 	       ;update all of the raw data
 	       (while (ignore-errors (listen bsd-stream))
@@ -167,16 +168,11 @@
 			((line2element line)
 			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 			(t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
-			 (let ((fstr (make-array '(0) :element-type 'character :fill-pointer 0 :adjustable t))
-			       (val))
-			   (attempt (progn
-				      (with-outputs-to-string ((*standard-output* *error-output*) fstr)
-					(setf val (eval (read-from-string line))))
-				      (setf fstr (format nil "~a~%~a" fstr val)))
-				    :on-error (setf fstr (format nil "~a~%error: ~a" fstr condition)))
-			   (format t "~a~%" fstr)
+			 (let ((val))
+			   (attempt (setf val (eval (read-from-string line)))
+				    :on-error (setf val (format nil "~a~%error: ~a~%" val condition)))
 		           ;if the caller's socket is still active, return the output to the caller
-			   (attempt (uni-send-string bsd-stream fstr)))))))))))
+			   (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
@@ -245,6 +241,57 @@
 	      :job (define-job :name ,name :quota 1 :Fn socket))
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
+(defmacro get-socket (agent)
+  "returns the agent's socket"
+  `(get-pandoric ',agent 'socket))
+
+(defmacro get-bsd-stream (agent)
+  "returns the bsd-stream inside the agent's socket"
+  `(get-pandoric (get-socket ,agent) 'bsd-stream))
+
+(defmacro get-data (agent)
+  "returns the data hash table inside the agent's socket"
+  `(get-pandoric (get-socket ,agent) 'data))
+
+(defmacro get-channel (channel% agent &key (N) (from `get-data))
+  "returns a channel (or subset of the channel) in the data/event hash table inside the agent's socket"
+  (let ((channel `(gethash-and-trigger ,(symbol-name channel%) (,from ,agent))))
+    (cond ((not N)
+	   channel)
+	  ((equal N 1)
+	   `(car ,channel))
+	  (t
+	   `(subseq ,channel 0 (min ,N (length ,channel)))))))
+
+(defmacro get-events (agent)
+  "returns the events hash table inside the agent's socket"
+  `(get-channel events ,agent))
+
+(let* ((stdout-default *standard-output*)
+       (stderr-default *error-output*)
+       (stdout stdout-default)
+       (stderr stderr-default))
+  (defpun terminal () (stdout-default stderr-default stdout stderr)
+    (setf *standard-output* stdout)
+    (setf *error-output* stderr)
+    ))
+
+(defmacro terminal-reset ()
+  "resets stdout/stderr to the server's default streams"
+  `(progn
+     (with-pandoric (stdout stderr stdout-default stderr-default) 'terminal
+       (setf stdout stdout-default)
+       (setf stderr stderr-default))
+     (terminal)))
+
+(defmacro terminal-redirect (agent)
+  "redirects all stdout/stderr output to the agent's bsd stream"
+  `(progn
+     (with-pandoric (stdout stderr) 'terminal
+       (setf stdout (get-bsd-stream ,agent))
+       (setf stderr (get-bsd-stream ,agent)))
+     (terminal)))
+
 ;defining function that prints an agent
 (let ((fun (lambda (agent)
 	     (with-pandoric (jobs) (symbol-function agent)
@@ -276,6 +323,8 @@
 
 (let ((fun (lambda (agent)
 	     (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
+	       ;if stdout/stderr are currently piped to the agent's stream, reset them before killing the agent
+	       (if (eq bsd-stream *standard-output*) (terminal-reset))
 	       (when (socket-active-p bsd-socket)
 		 (uni-send-string bsd-stream "[QUIT]")
 		 (while (socket-active-p bsd-socket)
@@ -295,32 +344,6 @@
 
 (define-symbol-macro kill 
     (kill-agents))
-
-(defmacro get-socket (agent)
-  "returns the agent's socket"
-  `(get-pandoric ',agent 'socket))
-
-(defmacro get-bsd-stream (agent)
-  "returns the bsd-stream inside the agent's socket"
-  `(get-pandoric (get-socket ,agent) 'bsd-stream))
-
-(defmacro get-data (agent)
-  "returns the data hash table inside the agent's socket"
-  `(get-pandoric (get-socket ,agent) 'data))
-
-(defmacro get-channel (channel% agent &key (N) (from `get-data))
-  "returns a channel (or subset of the channel) in the data/event hash table inside the agent's socket"
-  (let ((channel `(gethash-and-trigger ,(symbol-name channel%) (,from ,agent))))
-    (cond ((not N)
-	   channel)
-	  ((equal N 1)
-	   `(car ,channel))
-	  (t
-	   `(subseq ,channel 0 (min ,N (length ,channel)))))))
-
-(defmacro get-events (agent)
-  "returns the events hash table inside the agent's socket"
-  `(get-channel events ,agent))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
   "adds an event Fn to the trigger-channel"
@@ -482,7 +505,6 @@
   "connects a display agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557) (hsh (make-hash-table :test #'equalp)))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
-    (uni-send-string bsd-stream "(print-agents)")
     (while (socket-active-p bsd-socket)
       (with-time (/ 1 *updates-per-second*)
 	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
@@ -503,7 +525,7 @@
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
-	(with-time 1 #|(/ 1 *updates-per-second*)|#
+	(with-time (/ 1 *updates-per-second*)
 	  (uni-send-string bsd-stream (format nil "RPM-Raw=~a" i))))
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
