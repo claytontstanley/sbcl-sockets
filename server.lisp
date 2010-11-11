@@ -153,6 +153,7 @@
              ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
 	     (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
 		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
+	     ;make sure that all output on the bsd-stream has reached its destination via the bsd-socket
 	     (uni-without-interrupts 
 	      (finish-output bsd-stream))
 	     (let ((line))
@@ -170,8 +171,7 @@
 			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 			(t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 			 (let ((val))
-			   (attempt (setf val (eval (read-from-string line)))
-				    :on-error (setf val (format nil "~a~%error: ~a~%" val condition)))
+			   (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
 		           ;if the caller's socket is still active, return the output to the caller
 			   (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))))))
 
