@@ -526,7 +526,9 @@
 	  (format t "received on ~a:~a: ~a~%" host port line)
 	  (aif (line2element line)
 	       (if (equalp (car it) "rpm-raw")
-		   (uni-send-string bsd-stream (format nil "rpm-measured=~f" (+ (parse-float (cdr it)) 0 (- (/ (random 1000) 10000) .05))))))
+		   (uni-send-string bsd-stream (format nil "rpm-measured=~f" 
+						       (+ (parse-float (cdr it)) 
+							  (- (/ (random 1000) 10000) .05))))))
 	  (when (string-equal line "[QUIT]")
 	    (uni-send-string bsd-stream "[QUIT]")
 	    (sb-bsd-sockets::close bsd-stream)
