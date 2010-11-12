@@ -455,12 +455,20 @@
 ;stores the refresh rate of the server
 (defvar *updates-per-second* 60) 
 
-(let ((i -1)
-      (average-headroom 0))
-  (defpun headroom (val) (i average-headroom)
-    (incf i)
-    (setf average-headroom 
-	  (/ (+ (* average-headroom i) val) (+ i 1)))))
+(let ((hsh (make-hash-table))
+      (N 1000))
+  (defpun headroom (val) (hsh N)
+    (trim-data hsh N)
+    (push val (gethash 'headroom hsh))))
+
+(defmacro print-headroom (&key (strm t))
+  `(with-pandoric (hsh) 'headroom
+     (aif (gethash 'headroom hsh)
+	  (format ,strm "headroom: ~,8f seconds, ~,8f percent~%"
+		  (mean it) (* 100 (/ (mean it) (/ 1 *updates-per-second*)))))))
+
+(define-symbol-macro headroom
+    (print-headroom :strm nil))
   
 (defmacro send (form)
   "send is a shorthand for the monitor to send a message to the server;
@@ -486,7 +494,7 @@
 	  (,g!time-to-sleep))
      ,@body
      (setf ,g!time-to-sleep (/ (- ,g!finish (get-internal-real-time)) internal-time-units-per-second))
-     ;(headroom ,g!time-to-sleep)
+     (headroom ,g!time-to-sleep)
      (if (< ,g!time-to-sleep 0)
 	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
 	 (sleep ,g!time-to-sleep))))
