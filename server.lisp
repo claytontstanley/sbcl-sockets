@@ -517,12 +517,11 @@
   
 (defun run-display ()
   "connects a display agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557) (hsh (make-hash-table :test #'equalp)))
+  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (with-time (/ 1 *updates-per-second*)
 	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
-	  (trim-data hsh 200)
 	  (setf line (read-line bsd-stream))
 	  (format t "received on ~a:~a: ~a~%" host port line)
 	  (aif (line2element line)
