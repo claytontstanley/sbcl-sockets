@@ -274,8 +274,7 @@
        (stderr stderr-default))
   (defpun terminal () (stdout-default stderr-default stdout stderr)
     (setf *standard-output* stdout)
-    (setf *error-output* stderr)
-    ))
+    (setf *error-output* stderr)))
 
 (defmacro terminal-reset ()
   "resets stdout/stderr to the server's default streams"
