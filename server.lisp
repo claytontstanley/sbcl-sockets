@@ -496,7 +496,7 @@
 
 (defun run-monitor ()
   "connects a monitor agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9558))
+  (let ((bsd-socket) (bsd-stream) (line) (host "10.0.1.4") (port 9558))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (setf *monitor-bsd-stream* bsd-stream)
     (while (socket-active-p bsd-socket)
@@ -535,7 +535,7 @@
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
-	(with-time 1;(/ 1 *updates-per-second*)
+	(with-time (/ 1 *updates-per-second*)
 	  (uni-send-string bsd-stream (format nil "RPM-Raw=~a" i))))
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
