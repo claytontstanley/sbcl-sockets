@@ -14,7 +14,7 @@
   ;agent in charge of monitoring the server; 
   ;agent can send the server messages, query, execute remote procedure calls (RPCs) etc.
   (define-agent :name monitor
-    :host 127.0.0.1
+    :host 10.0.1.4
     :port 9558)
 
   ;add an event that creates a calibrated-channel from the raw-channel, using the discrepency between the measured-channel

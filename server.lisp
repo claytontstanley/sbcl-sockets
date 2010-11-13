@@ -535,7 +535,7 @@
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
-	(with-time (/ 1 *updates-per-second*)
+	(with-time 1;(/ 1 *updates-per-second*)
 	  (uni-send-string bsd-stream (format nil "RPM-Raw=~a" i))))
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))
