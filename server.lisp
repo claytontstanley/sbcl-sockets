@@ -233,13 +233,13 @@
   "container to store a collection of jobs (in a hash table)
    defines a pandoric function that will loop through all the jobs and 
    execute the functions that have been latched to each job"
-  `(let ((jobs (make-hash-table))
-	 (socket (aif ,socket it (make-socket :host ,host :port ,port))))
-     (defpun ,name () (jobs socket)
+  `(progn
+     (defpun ,name () ((jobs (make-hash-table))
+		       (socket (aif ,socket it (make-socket :host ,host :port ,port))))
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
      (add-job :agent ,name
-	      :job (define-job :name ,name :quota 1 :Fn socket))
+	      :job (define-job :name ,name :quota 1 :Fn (get-pandoric ',name 'socket)))
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
 (defmacro get-socket (agent)
@@ -268,13 +268,12 @@
   "returns the events hash table inside the agent's socket"
   `(get-channel events ,agent))
 
-(let* ((stdout-default *standard-output*)
-       (stderr-default *error-output*)
-       (stdout stdout-default)
-       (stderr stderr-default))
-  (defpun terminal () (stdout-default stderr-default stdout stderr)
-    (setf *standard-output* stdout)
-    (setf *error-output* stderr)))
+(defpun terminal () ((stdout-default *standard-output*)
+		     (stderr-default *error-output*)
+		     (stdout *standard-output*)
+		     (stderr *error-output*))
+  (setf *standard-output* stdout)
+  (setf *error-output* stderr))
 
 (defmacro terminal-reset ()
   "resets stdout/stderr to the server's default streams"
@@ -323,9 +322,7 @@
   `(dolist (,g!agent (get-pandoric #'agents 'agents))
      (funcall (symbol-function ,g!agent))))
 
-(let ((agents))
-  (defpun agents () (agents)
-    ()))
+(defpun agents () ((agents)))
 
 (let ((fun (lambda (agent)
 	     (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
@@ -455,11 +452,9 @@
 ;stores the refresh rate of the server
 (defvar *updates-per-second* 60) 
 
-(let ((hsh (make-hash-table))
-      (N 1000))
-  (defpun headroom (val) (hsh N)
-    (trim-data hsh N)
-    (push val (gethash 'headroom hsh))))
+(defpun headroom (val) ((hsh (make-hash-table)) (N 1000))
+  (trim-data hsh N)
+  (push val (gethash 'headroom hsh)))
 
 (defmacro print-headroom (&key (strm t))
   `(with-pandoric (hsh) 'headroom
