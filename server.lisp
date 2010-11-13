@@ -494,9 +494,11 @@
 	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
 	 (sleep ,g!time-to-sleep))))
 
+(defvar *server-ip* "10.0.1.6") 
+
 (defun run-monitor ()
   "connects a monitor agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "10.0.1.4") (port 9558))
+  (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9558))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (setf *monitor-bsd-stream* bsd-stream)
     (while (socket-active-p bsd-socket)
@@ -512,7 +514,7 @@
   
 (defun run-display ()
   "connects a display agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "10.0.1.4") (port 9557))
+  (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9557))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (with-time (/ 1 *updates-per-second*)
@@ -531,7 +533,7 @@
 
 (defun run-daq ()
   "connects a daq agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "10.0.1.4") (port 9556))
+  (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9556))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
