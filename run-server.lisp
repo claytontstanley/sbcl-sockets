@@ -3,7 +3,7 @@
 
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
   (define-agent :name DAQ
-    :host 127.0.0.1
+    :host 10.0.1.6
     :port 9556)
 
   ;agent in charge of all jobs concerning the display (that is, the lisp->OSX bridge)
