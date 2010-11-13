@@ -512,7 +512,7 @@
   
 (defun run-display ()
   "connects a display agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9557))
+  (let ((bsd-socket) (bsd-stream) (line) (host "10.0.1.4") (port 9557))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (with-time (/ 1 *updates-per-second*)
@@ -531,7 +531,7 @@
 
 (defun run-daq ()
   "connects a daq agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host "127.0.0.1") (port 9556))
+  (let ((bsd-socket) (bsd-stream) (line) (host "10.0.1.4") (port 9556))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
