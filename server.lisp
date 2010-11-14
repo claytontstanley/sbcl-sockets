@@ -324,29 +324,47 @@
 
 (defpun agents () ((agents)))
 
-(let ((fun (lambda (agent)
-	     (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
-	       ;if stdout/stderr are currently piped to the agent's stream, reset them before killing the agent
-	       (if (eq bsd-stream *standard-output*) (terminal-reset))
-	       (when (socket-active-p bsd-socket)
-		 (uni-send-string bsd-stream "[QUIT]")
-		 (while (socket-active-p bsd-socket)
-		   (funcall (get-pandoric agent 'socket)))))
-	     (with-pandoric (agents) 'agents
-	       (setf agents (remove-if (lambda (x) (equal x agent)) agents)))
-	     (fmakunbound agent))))
+(let ((disconnect (lambda (agent)
+		    (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
+	            ;if stdout/stderr are currently piped to the agent's stream, reset them before killing the agent
+		      (if (or (eq bsd-stream *error-output*)
+			      (eq bsd-stream *standard-output*))
+			  (terminal-reset))
+		      (when (socket-active-p bsd-socket)
+			(uni-send-string bsd-stream "[QUIT]")
+			(while (socket-active-p bsd-socket)
+			  (funcall (get-pandoric agent 'socket)))))))
+      (kill (lambda (agent)
+	      (with-pandoric (agents) 'agents
+		(setf agents (remove-if (lambda (x) (equal x agent)) agents)))
+	      (fmakunbound agent))))
 
   (defmacro kill-agent (agent)
     "attempts to cleanly close the agent's socket; then removes the agent from agents"
-    `(funcall ,fun ',agent))
+    `(progn
+       (funcall ,disconnect ',agent)
+       (funcall ,kill ',agent)))
 
   (defmacro! kill-agents ()
-    "attempts to cleanly close all agent's sockets; then removes all agents from agents"
+    "attempts to cleanly close all agents' sockets; then removes all agents from agents"
     `(dolist (,g!agent (get-pandoric 'agents 'agents))
-       (funcall ,fun ,g!agent))))
+       (funcall ,disconnect ,g!agent)
+       (funcall ,kill ,g!agent)))
+
+  (defmacro disconnect-agent (agent)
+    "attempts to cleanly close the agent's socket"
+    `(funcall ,disconnect ',agent))
+
+  (defmacro! disconnect-agents ()
+    "attempts to cleanly close all agents' sockets"
+    `(dolist (,g!agent (get-pandoric 'agents 'agents))
+       (funcall ,disconnect ,g!agent))))
 
 (define-symbol-macro kill 
     (kill-agents))
+
+(define-symbol-macro disconnect
+    (disconnect-agents))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
   "adds an event Fn to the trigger-channel"
