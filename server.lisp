@@ -324,20 +324,22 @@
 
 (defpun agents () ((agents)))
 
-(let ((disconnect (lambda (agent)
-		    (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
-	            ;if stdout/stderr are currently piped to the agent's stream, reset them before killing the agent
-		      (if (or (eq bsd-stream *error-output*)
-			      (eq bsd-stream *standard-output*))
-			  (terminal-reset))
-		      (when (socket-active-p bsd-socket)
-			(uni-send-string bsd-stream "[QUIT]")
-			(while (socket-active-p bsd-socket)
-			  (funcall (get-pandoric agent 'socket)))))))
-      (kill (lambda (agent)
-	      (with-pandoric (agents) 'agents
-		(setf agents (remove-if (lambda (x) (equal x agent)) agents)))
-	      (fmakunbound agent))))
+(let ((disconnect 
+       (lambda (agent)
+	 (with-pandoric (bsd-socket bsd-stream) (get-pandoric agent 'socket)
+	   ;if stdout/stderr are currently piped to the agent's stream, reset them before killing the agent
+	   (if (or (eq bsd-stream *error-output*)
+		   (eq bsd-stream *standard-output*))
+	       (terminal-reset))
+	   (when (socket-active-p bsd-socket)
+	     (uni-send-string bsd-stream "[QUIT]")
+	     (while (socket-active-p bsd-socket)
+	       (funcall (get-pandoric agent 'socket)))))))
+      (kill 
+       (lambda (agent)
+	 (with-pandoric (agents) 'agents
+	   (setf agents (remove-if (lambda (x) (equal x agent)) agents)))
+	 (fmakunbound agent))))
 
   (defmacro kill-agent (agent)
     "attempts to cleanly close the agent's socket; then removes the agent from agents"
