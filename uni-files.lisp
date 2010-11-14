@@ -16,7 +16,7 @@
 ;;; call uni-make-socket on the client
 (defmacro uni-prepare-socket (host port)
   `(let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
-	 (host ,(symbol-name host))
+	 (host ,host)
 	 (port ,port))
      (setf (sb-bsd-sockets:non-blocking-mode sock) t)
      (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)

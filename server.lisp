@@ -145,7 +145,7 @@
 	  (host ,(aif host (symbol-name it)))
 	  (port ,port)
 	  (N 100)
-	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket ,host ,port))))
+	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket host port))))
      ;data storing any triggered events
      (setf (gethash "events" data) (make-hash-table :test #'equalp))
      (setf (gethash "socket" data)
@@ -162,13 +162,13 @@
 		 (trim-data data N)
 		 (setf line (uni-socket-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
-		 (acond ((string-equal line "[QUIT]")
+		 (acond ((line2element line)
+			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
+			((string-equal line "[QUIT]")
 			 (if bsd-stream (sb-bsd-sockets::close bsd-stream))
 			 (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
 			 (setf bsd-stream nil)
 			 (setf bsd-socket nil))
-			((line2element line)
-			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 			(t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 			 (let ((val))
 			   (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
@@ -494,7 +494,7 @@
 	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
 	 (sleep ,g!time-to-sleep))))
 
-(defvar *server-ip* "10.0.1.6") 
+(defvar *server-ip* "10.0.1.4") 
 
 (defun run-monitor ()
   "connects a monitor agent to the server"

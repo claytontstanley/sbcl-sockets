@@ -3,18 +3,18 @@
 
   ;agent in charge of all jobs concerning the DAQ (that is, the DAQ->lisp bridge)
   (define-agent :name DAQ
-    :host 10.0.1.6
+    :host 10.0.1.4
     :port 9556)
 
   ;agent in charge of all jobs concerning the display (that is, the lisp->OSX bridge)
   (define-agent :name display
-    :host 10.0.1.6
+    :host 10.0.1.4
     :port 9557)
 
   ;agent in charge of monitoring the server; 
   ;agent can send the server messages, query, execute remote procedure calls (RPCs) etc.
   (define-agent :name monitor
-    :host 10.0.1.6
+    :host 10.0.1.4
     :port 9558)
 
   ;add an event that creates a calibrated-channel from the raw-channel, using the discrepency between the measured-channel
