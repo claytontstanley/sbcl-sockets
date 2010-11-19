@@ -43,7 +43,9 @@
 
 (defmacro attempt (form &key (on-error `(format t "error: ~a~%" condition)))
   "anaphoric macro for attemping to evaluate form; default is to print error to screen on error"
-  `(handler-case ,form (error (condition) ,on-error)))
+  `(handler-case ,form (error (condition) 
+			 (declare (ignorable condition))
+			 ,on-error)))
 
 (defmacro with-gensyms ((&rest names) &body body)
   "paul graham's with-gensyms"
@@ -130,12 +132,11 @@
 	      (attempt (funcall event)))))
      ,val))
   
-(defmacro make-socket (&key (bsd-stream) (bsd-socket) (host) (port))
+(defmacro make-socket-builder (bsd-stream bsd-socket host port &rest process-line)
   "defines a socket that is a pandoric function
-   the function has an inner loop that processes all lines currently on the stream;
-   if a line is '[QUIT]', it will close the stream;
-   if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
-   otherwise, it will eval the line in place"
+   the function has an inner loop that processes all lines currently on the stream
+   the way that each line is processed is determined by the code supplied in body
+   'line' (and any other variable within the scope of this builder) is the anaphor"
   `(let* (;stream that will be used to send & receive messages between the lisp backend & the stream
 	  (bsd-stream ,bsd-stream)
 	  (bsd-socket ,bsd-socket)
@@ -162,18 +163,31 @@
 		 (trim-data data N)
 		 (setf line (uni-socket-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
-		 (acond ((line2element line)
-			 (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
-			((string-equal line "[QUIT]")
-			 (if bsd-stream (sb-bsd-sockets::close bsd-stream))
-			 (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
-			 (setf bsd-stream nil)
-			 (setf bsd-socket nil))
-			(t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
-			 (let ((val))
-			   (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
-		           ;if the caller's socket is still active, return the output to the caller
-			   (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))))))
+		 ,@process-line))))))
+
+(defmacro make-socket (&key (host) (port))
+  "if a line is '[QUIT]', it will close the stream;
+   if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
+   otherwise, it will eval the line in place"
+  `(make-socket-builder 
+    nil nil ,host ,port
+    (acond ((line2element line)
+	    (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
+	   ((string-equal line "[QUIT]")
+	    (if bsd-stream (sb-bsd-sockets::close bsd-stream))
+	    (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
+	    (setf bsd-stream nil)
+	    (setf bsd-socket nil))
+	   (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
+	    (let ((val))
+	      (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
+	      ;if the caller's socket is still active, return the output to the caller
+	      (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
+
+(defmacro make-modbus-socket (&key (host) (port) (channel))
+  `(make-socket-builder
+    nil nil ,host ,port
+    (push (parse-float line) (gethash-and-trigger ',channel data))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
@@ -471,6 +485,7 @@
 (defvar *monitor-bsd-stream*)
 ;stores the refresh rate of the server
 (defvar *updates-per-second* 60) 
+(defvar *seconds-per-update* (/ 1 *updates-per-second*))
 
 (defpun headroom (val) ((hsh (make-hash-table)) (N 1000))
   (trim-data hsh N)
@@ -480,7 +495,7 @@
   `(with-pandoric (hsh) 'headroom
      (aif (gethash 'headroom hsh)
 	  (format ,strm "headroom: ~,8f seconds, ~,8f percent~%"
-		  (mean it) (* 100 (/ (mean it) (/ 1 *updates-per-second*)))))))
+		  (mean it) (* 100 (/ (mean it) *seconds-per-update*))))))
 
 (define-symbol-macro headroom
     (print-headroom :strm nil))
@@ -516,13 +531,21 @@
 
 (defvar *server-ip* "10.0.1.4") 
 
+(defun connect (host port)
+  (let ((uni-make-socket-fn (uni-make-socket host port))
+	(bsd-stream) (bsd-socket))
+    (while (and (not bsd-stream) (not bsd-socket))
+      (with-time *seconds-per-update*
+	(multiple-value-setq (bsd-stream bsd-socket) (funcall uni-make-socket-fn))))
+    (values bsd-stream bsd-socket)))
+
 (defun run-monitor ()
   "connects a monitor agent to the server"
-  (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9558))
-    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
+  (let* ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9558))
+    (multiple-value-setq (bsd-stream bsd-socket) (connect host port))
     (setf *monitor-bsd-stream* bsd-stream)
     (while (socket-active-p bsd-socket)
-      (with-time (/ 1 *updates-per-second*)
+      (with-time *seconds-per-update*
 	(if (listen) (attempt (eval (read))))
 	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	  (setf line (read-line bsd-stream))
@@ -535,9 +558,9 @@
 (defun run-display ()
   "connects a display agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9557))
-    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
+    (multiple-value-setq (bsd-stream bsd-socket) (connect host port))
     (while (socket-active-p bsd-socket)
-      (with-time (/ 1 *updates-per-second*)
+      (with-time *seconds-per-update*
 	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	  (setf line (read-line bsd-stream))
 	  (format t "received on ~a:~a: ~a~%" host port line)
@@ -554,10 +577,10 @@
 (defun run-daq ()
   "connects a daq agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9556))
-    (multiple-value-setq (bsd-stream bsd-socket) (uni-make-socket host port))
+    (multiple-value-setq (bsd-stream bsd-socket) (connect host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
-	(with-time (/ 1 *updates-per-second*)
+	(with-time *seconds-per-update*
 	  (uni-send-string bsd-stream (format nil "RPM-Raw=~a" i))))
       (while (and (socket-active-p bsd-socket) (listen bsd-stream))
 	(setf line (read-line bsd-stream))

@@ -5,11 +5,20 @@
 ;;; a passive socket.  It should open an active socket to that address and
 ;;; return a stream for communicating over that connection.
 ;;; the created socket that the stream points to is returned as the second value
-(defun uni-make-socket (host port)
-  (let* ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp)))
-    (sb-bsd-sockets::socket-connect sock (sb-bsd-sockets::make-inet-address host) port)
-    (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
-      (values stream sock))))
+(defmacro uni-make-socket (host port)
+  `(define-job :name ,(symb `connect- host `- port)
+     :Fn (plambda () (host port)
+	   (block try
+	     (let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp)))	 
+	       (attempt (sb-bsd-sockets::socket-connect sock (sb-bsd-sockets::make-inet-address ,host) ,port)
+			:on-error (progn
+				    (format t "~a~%" condition) 
+				    (sb-bsd-sockets:socket-close sock)
+				    (return-from try (values nil nil))))
+	       (format t "connecting ~a:~a~%" host port)
+	       (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
+		 (values stream sock)))))
+     :quota (* *updates-per-second* 1)))
 
 ;;; uni-prepare-socket
 ;;; this is the server version of uni-make-socket; call uni-prepare-socket on the server
@@ -21,10 +30,10 @@
      (setf (sb-bsd-sockets:non-blocking-mode sock) t)
      (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
      (sb-bsd-sockets::socket-listen sock 5)
-     (define-job :name ,(symb `connect-socket- host `- port) 
+     (define-job :name ,(symb `accept- host `- port) 
        :Fn (plambda () (sock host port)
 	     (awhen (sb-bsd-sockets::socket-accept sock) 
-		    (format t "connecting~%")
+		    (format t "connecting ~a:~a~%" host port)
 		    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
        :quota (* *updates-per-second* 1)))) ;have this plambda fire ~ once every second
 
