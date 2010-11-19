@@ -284,7 +284,7 @@
 	      (attempt (funcall event)))))
      ,val))
   
-(defmacro make-socket-builder (bsd-stream bsd-socket host port &rest process-line)
+(defmacro make-socket-builder (bsd-stream bsd-socket host port type &rest process-line)
   "defines a socket that is a pandoric function
    the function has an inner loop that processes all lines currently on the stream
    the way that each line is processed is determined by the code supplied in process-line
@@ -298,31 +298,31 @@
 	  (host ,(aif host (symbol-name it)))
 	  (port ,port)
 	  (N 100)
-	  (uni-server-socket-Fn (if (and host port) (uni-server-socket host port))))
+	  (uni-socket-Fn (if (and host port) (,(symb 'uni- type '-socket) host port))))
      ;data storing any triggered events
      (setf (gethash "events" data) (make-hash-table :test #'equalp))
      (setf (gethash "socket" data)
-	   (plambda () (bsd-stream bsd-socket data N uni-server-socket-Fn host port)
+	   (plambda () (bsd-stream bsd-socket data N uni-socket-Fn host port)
              ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
-	     (if (and (not bsd-stream) (not bsd-socket) uni-server-socket-Fn)
-		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-server-socket-Fn)))
+	     (if (and (not bsd-stream) (not bsd-socket) uni-socket-Fn)
+		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-socket-Fn)))
 	     ;make sure that all output on the bsd-stream has reached its destination via the bsd-socket
 	     (uni-without-interrupts 
 	      (finish-output bsd-stream))
+	     (trim-data data N)
 	     (let ((line))
 	       ;update all of the raw data
 	       (while (ignore-errors (listen bsd-stream))
-		 (trim-data data N)
 		 (setf line (uni-socket-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
 		 ,@process-line))))))
 
-(defmacro make-socket (&key (host) (port))
+(defmacro make-socket (&key (host) (port) (type `server))
   "if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
    if a line is '[QUIT]', it will close the stream
    otherwise, it will eval the line in place"
   `(make-socket-builder 
-    nil nil ,host ,port
+    nil nil ,host ,port ,type
     (acond ((line2element line)
 	    (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 	   ((string-equal line "[QUIT]")
@@ -336,18 +336,18 @@
 	      ;if the caller's socket is still active, return the output to the caller
 	      (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
 
-(defmacro make-modbus-socket (&key (host) (port) (channel))
+(defmacro make-modbus-socket (&key (host) (port))
   `(make-socket-builder
-    nil nil ,host ,port
-    (push (parse-float line) (gethash-and-trigger ',channel data))))
+    nil nil ,host ,port client
+    (error "found ~a on socket; socket should never have a value" line)))
 
-(defmacro define-agent (&key (name) (socket) (host) (port))
+(defmacro define-agent (&key (name) (socket) (host) (port) (type `server))
   "container to store a collection of jobs (in a hash table)
    defines a pandoric function that will loop through all the jobs and 
    execute the functions that have been latched to each job"
   `(progn
      (defpun ,name () ((jobs (make-hash-table))
-		       (socket (aif ,socket it (make-socket :host ,host :port ,port))))
+		       (socket (aif ,socket it (make-socket :host ,host :port ,port :type ,type))))
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
      (add-job :agent ,name
@@ -513,29 +513,35 @@
   `(uni-send-string (get-bsd-stream ,agent)
 		    (format nil "~a=~a" ,(symbol-name channel) ,val)))
   
-;(defmacro add-output (&key (agent) (name) (quota) (value))
-;  "adds an output to agent that sends 'value' through the socket"
-;  `(add-job :agent ,agent
-;	    :job (define-job :name ,name ,@(aif quota (list :quota it))
-;			     :Fn (lambda ()
-;				   (aif ,value
-;					(send-output ,name ,agent it))))))
-
-(defmacro add-output-event (&key (output-channel) (trigger-channel) (value%))
-  "adds an output event to agent that sends 'value' through the socket when trigger-channel is updated"
+(defmacro add-output-job (&key (agent%) (name%) (output-channel) (quota) (value))
+  (let ((agent (aif agent% it (second output-channel)))
+	(name (aif name% it (first output-channel))))
+    "adds a job to agent that sends 'value' through the socket when quota is reached"
+    `(add-job :agent ,agent
+	      :job (define-job :name ,name ,@(aif quota (list :quota it))
+			       :Fn (lambda ()
+				     (aif ,value
+					  (send-output ,@output-channel it)))))))
+  
+(defmacro add-output-event (&key (trigger-channel) (output-channel) (value%))
+  "adds an event to agent that sends 'value' through the socket when trigger-channel is updated"
   (let ((value (aif value% it `(get-channel ,@trigger-channel :N 1))))
     `(add-event :trigger-channel ,trigger-channel
 		:Fn (lambda ()
 		      (aif ,value
 			   (send-output ,@output-channel it))))))
 
-;(defmacro add-channel (&key (agent) (name) (quota) (value))
-;  "adds channel to agent that evaluates value"
-;  `(add-job :agent ,agent
-;	    :job (define-job :name ,name ,@(aif quota (list :quota it))
-;			     :Fn (lambda ()
-;				   (aif ,value
-;					(push it (get-channel ,name ,agent)))))))
+(defmacro add-channel-job (&key (agent%) (name%) (channel) (quota) (value))
+  "adds a job to agent that pushes 'value' onto channel when quota is reached"
+  (let ((agent (aif agent% it (second channel)))
+	(name (aif name% it (first channel))))
+    `(add-job :agent ,agent
+	      :job (define-job :name ,name ,@(aif quota (list :quota it))
+			       :Fn (lambda ()
+				     (aif ,value
+					  (push it (get-channel ,@channel))))))))
+
+;TODO: might want to define add-channel-event...
   
 (defmacro! add-calibration (&key (N 10) (measured-channel) (calibrated-channel) (raw-channel))
   "adds a job for an agent that calibrates the raw channel by using the discrepency between the measured and raw-when-measured channels"
