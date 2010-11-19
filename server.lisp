@@ -9,9 +9,10 @@
 ;;; Filename    : server.lisp
 ;;; Version     : 1.0
 ;;; 
-;;; Description : A socket-based server; this implementation is not concurrent/threaded
+;;; Description : A socket-based server; this is a synchronous, non-threaded implementation
+;;;               Asynchronous behavior and threads are achieved by using a discreet event simulator
 ;;;             
-;;; Dependencies: requires that letf.lisp is loaded; loads uni-files.lisp
+;;; Dependencies: requires that letf.lisp is loaded
 ;;;
 ;;; Bugs        : ???
 ;;;
@@ -20,9 +21,7 @@
 ;;; 2010.10.11  : Creation.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;load some functions that make it easier to send/receive messages across a socket
-(load "uni-files.lisp")
+(require 'sb-bsd-sockets)
 
 (defmacro! acond (&rest clauses)
  "works just like cond, but stores the 
@@ -112,83 +111,6 @@
 	     (setf quot 0)
 	     (attempt (funcall Fn)))))))
 
-(defun gethash-and-trigger (key hash)
-  "alias for gethash; used to tweak the setf gethash function so that events are triggered when the hash table is updated"
-  (multiple-value-bind (x y) (gethash key hash)
-    (values x y)))
-
-(defsetf gethash-and-trigger (key hash) (val)
-  "works just like the setf gethash method, except that all events associated with the key of the hash table being changed will also be executed"
-  `(progn
-     ;update the hash table (analogous to the gethash setf method)
-     (setf (gethash ,key ,hash) ,val)
-     ;and... grab the event hash table, and eval all events associated with the key being updated
-     ;if these events update the hash table, then events associated with that update will also be triggered
-     ;and so on...
-     (aif (gethash "events" ,hash)
-	  (with-pandoric (host port) (gethash "socket" ,hash)
-	    (dolist (event (gethash ,key it))
-	      (format t "evaluating event on ~a:~a: ~a~%" host port event)
-	      (attempt (funcall event)))))
-     ,val))
-  
-(defmacro make-socket-builder (bsd-stream bsd-socket host port &rest process-line)
-  "defines a socket that is a pandoric function
-   the function has an inner loop that processes all lines currently on the stream
-   the way that each line is processed is determined by the code supplied in body
-   'line' (and any other variable within the scope of this builder) is the anaphor"
-  `(let* (;stream that will be used to send & receive messages between the lisp backend & the stream
-	  (bsd-stream ,bsd-stream)
-	  (bsd-socket ,bsd-socket)
-          ;data storing any received messages
-	  (data (make-hash-table :test #'equalp))
-          ;maximum length of a channel in the data hash table
-	  (host ,(aif host (symbol-name it)))
-	  (port ,port)
-	  (N 100)
-	  (uni-prepare-socket-Fn (if (and host port) (uni-prepare-socket host port))))
-     ;data storing any triggered events
-     (setf (gethash "events" data) (make-hash-table :test #'equalp))
-     (setf (gethash "socket" data)
-	   (plambda () (bsd-stream bsd-socket data N uni-prepare-socket-Fn host port)
-             ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
-	     (if (and (not bsd-stream) (not bsd-socket) uni-prepare-socket-Fn)
-		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-prepare-socket-Fn)))
-	     ;make sure that all output on the bsd-stream has reached its destination via the bsd-socket
-	     (uni-without-interrupts 
-	      (finish-output bsd-stream))
-	     (let ((line))
-	       ;update all of the raw data
-	       (while (ignore-errors (listen bsd-stream))
-		 (trim-data data N)
-		 (setf line (uni-socket-read-line bsd-stream))
-		 (format t "received on ~a:~a: ~a~%" host port line)
-		 ,@process-line))))))
-
-(defmacro make-socket (&key (host) (port))
-  "if a line is '[QUIT]', it will close the stream;
-   if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
-   otherwise, it will eval the line in place"
-  `(make-socket-builder 
-    nil nil ,host ,port
-    (acond ((line2element line)
-	    (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
-	   ((string-equal line "[QUIT]")
-	    (if bsd-stream (sb-bsd-sockets::close bsd-stream))
-	    (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
-	    (setf bsd-stream nil)
-	    (setf bsd-socket nil))
-	   (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
-	    (let ((val))
-	      (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
-	      ;if the caller's socket is still active, return the output to the caller
-	      (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
-
-(defmacro make-modbus-socket (&key (host) (port) (channel))
-  `(make-socket-builder
-    nil nil ,host ,port
-    (push (parse-float line) (gethash-and-trigger ',channel data))))
-
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
   (let ((name (guard (second (member :name (flatten job)))
@@ -242,6 +164,157 @@
      (with-pandoric (jobs) ',agent
        (with-pandoric (Fn) (gethash ',name jobs)
 	 (funcall Fn)))))
+
+;stores the refresh rate of various loops in the system
+(defvar *updates-per-second* 60) 
+(defvar *seconds-per-update* (/ 1 *updates-per-second*))
+
+;////////////////////////////////////////////////////////////
+;////////////////////////////////////////////////////////////
+;stuff to make sending/receiving/connecting across sockets easier
+;borrowed heavily from uni-files.lisp in the actr6 distribution
+
+(defmacro uni-client-socket (host port)
+  "opens an active socket on host:port; client-side function
+   returns a pandoric function that, when called
+   attempts to open and then return a stream and socket for communicating over the connection"
+  `(define-job :name ,(symb `connect- host `- port)
+     :Fn (plambda () (host port)
+	   (block try
+	     (let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp)))	 
+	       (attempt (sb-bsd-sockets::socket-connect sock (sb-bsd-sockets::make-inet-address ,host) ,port)
+			:on-error (progn
+				    (format t "~a~%" condition) 
+				    (sb-bsd-sockets:socket-close sock)
+				    (return-from try (values nil nil))))
+	       (format t "connecting ~a:~a~%" host port)
+	       (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
+		 (values stream sock)))))
+     :quota (* *updates-per-second* 1))) ;have this plambda fire ~ once every second
+
+(defun uni-connect (host port)
+  "attempts to connect to socket on host:port; client-side function
+   will hang until a connection is established
+   returns a stream and socket for communicating over the connection"
+  (let ((uni-client-socket-fn (uni-client-socket host port))
+	(bsd-stream) (bsd-socket))
+    (while (and (not bsd-stream) (not bsd-socket))
+      (with-time *seconds-per-update*
+	(multiple-value-setq (bsd-stream bsd-socket) (funcall uni-client-socket-fn))))
+    (values bsd-stream bsd-socket)))
+
+(defmacro uni-server-socket (host port)
+  "opens an active socket on host:port; server-side function
+   returns a pandoric function that, when called
+   attempts to open and then return a stream and socket for communicating over the connection"
+  `(let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
+	 (host ,host)
+	 (port ,port))
+     (setf (sb-bsd-sockets:non-blocking-mode sock) t)
+     (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
+     (sb-bsd-sockets::socket-listen sock 5)
+     (define-job :name ,(symb `accept- host `- port) 
+       :Fn (plambda () (sock host port)
+	     (awhen (sb-bsd-sockets::socket-accept sock) 
+		    (format t "connecting ~a:~a~%" host port)
+		    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
+       :quota (* *updates-per-second* 1)))) ;have this plambda fire ~ once every second
+
+(defmacro uni-without-interrupts (&body body)
+  `(sb-sys:without-interrupts ,@body))
+
+(defun uni-send-string (socket string)
+  "sends string down socket; string will have a newline appended if not present already"
+  (uni-without-interrupts 
+   (write-string 
+    (format nil "~a~%" (string-right-trim (list #\Newline #\Return #\LineFeed) string))
+    socket)
+   ;flush socket so that the string is guaranteed to be sent now
+   (finish-output socket)))
+
+(defun uni-socket-read-line (stream)
+  "Read a line terminated by \\n"
+  (read-line stream nil nil))
+
+;////////////////////////////////////////////////////////////
+;///////////////////////////////////////////end socket stuff
+
+(defun gethash-and-trigger (key hash)
+  "alias for gethash; used to tweak the setf gethash function so that events are triggered when the hash table is updated"
+  (multiple-value-bind (x y) (gethash key hash)
+    (values x y)))
+
+(defsetf gethash-and-trigger (key hash) (val)
+  "works just like the setf gethash method, except that all events associated with the key of the hash table being changed will also be executed"
+  `(progn
+     ;update the hash table (analogous to the gethash setf method)
+     (setf (gethash ,key ,hash) ,val)
+     ;and... grab the event hash table, and eval all events associated with the key being updated
+     ;if these events update the hash table, then events associated with that update will also be triggered
+     ;and so on...
+     (aif (gethash "events" ,hash)
+	  (with-pandoric (host port) (gethash "socket" ,hash)
+	    (dolist (event (gethash ,key it))
+	      (format t "evaluating event on ~a:~a: ~a~%" host port event)
+	      (attempt (funcall event)))))
+     ,val))
+  
+(defmacro make-socket-builder (bsd-stream bsd-socket host port &rest process-line)
+  "defines a socket that is a pandoric function
+   the function has an inner loop that processes all lines currently on the stream
+   the way that each line is processed is determined by the code supplied in process-line
+   'line' (and any other variable within the scope of this builder) is the anaphor"
+  `(let* (;stream that will be used to send & receive messages between the lisp backend & the stream
+	  (bsd-stream ,bsd-stream)
+	  (bsd-socket ,bsd-socket)
+          ;data storing any received messages
+	  (data (make-hash-table :test #'equalp))
+          ;maximum length of a channel in the data hash table
+	  (host ,(aif host (symbol-name it)))
+	  (port ,port)
+	  (N 100)
+	  (uni-server-socket-Fn (if (and host port) (uni-server-socket host port))))
+     ;data storing any triggered events
+     (setf (gethash "events" data) (make-hash-table :test #'equalp))
+     (setf (gethash "socket" data)
+	   (plambda () (bsd-stream bsd-socket data N uni-server-socket-Fn host port)
+             ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
+	     (if (and (not bsd-stream) (not bsd-socket) uni-server-socket-Fn)
+		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-server-socket-Fn)))
+	     ;make sure that all output on the bsd-stream has reached its destination via the bsd-socket
+	     (uni-without-interrupts 
+	      (finish-output bsd-stream))
+	     (let ((line))
+	       ;update all of the raw data
+	       (while (ignore-errors (listen bsd-stream))
+		 (trim-data data N)
+		 (setf line (uni-socket-read-line bsd-stream))
+		 (format t "received on ~a:~a: ~a~%" host port line)
+		 ,@process-line))))))
+
+(defmacro make-socket (&key (host) (port))
+  "if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
+   if a line is '[QUIT]', it will close the stream
+   otherwise, it will eval the line in place"
+  `(make-socket-builder 
+    nil nil ,host ,port
+    (acond ((line2element line)
+	    (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
+	   ((string-equal line "[QUIT]")
+	    (if bsd-stream (sb-bsd-sockets::close bsd-stream))
+	    (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
+	    (setf bsd-stream nil)
+	    (setf bsd-socket nil))
+	   (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
+	    (let ((val))
+	      (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
+	      ;if the caller's socket is still active, return the output to the caller
+	      (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
+
+(defmacro make-modbus-socket (&key (host) (port) (channel))
+  `(make-socket-builder
+    nil nil ,host ,port
+    (push (parse-float line) (gethash-and-trigger ',channel data))))
 
 (defmacro define-agent (&key (name) (socket) (host) (port))
   "container to store a collection of jobs (in a hash table)
@@ -483,9 +556,6 @@
 
 ;dynamically scoped variable that stores the monitor's bsd-stream
 (defvar *monitor-bsd-stream*)
-;stores the refresh rate of the server
-(defvar *updates-per-second* 60) 
-(defvar *seconds-per-update* (/ 1 *updates-per-second*))
 
 (defpun headroom (val) ((hsh (make-hash-table)) (N 1000))
   (trim-data hsh N)
@@ -531,18 +601,10 @@
 
 (defvar *server-ip* "10.0.1.4") 
 
-(defun connect (host port)
-  (let ((uni-make-socket-fn (uni-make-socket host port))
-	(bsd-stream) (bsd-socket))
-    (while (and (not bsd-stream) (not bsd-socket))
-      (with-time *seconds-per-update*
-	(multiple-value-setq (bsd-stream bsd-socket) (funcall uni-make-socket-fn))))
-    (values bsd-stream bsd-socket)))
-
 (defun run-monitor ()
   "connects a monitor agent to the server"
   (let* ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9558))
-    (multiple-value-setq (bsd-stream bsd-socket) (connect host port))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-connect host port))
     (setf *monitor-bsd-stream* bsd-stream)
     (while (socket-active-p bsd-socket)
       (with-time *seconds-per-update*
@@ -558,7 +620,7 @@
 (defun run-display ()
   "connects a display agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9557))
-    (multiple-value-setq (bsd-stream bsd-socket) (connect host port))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-connect host port))
     (while (socket-active-p bsd-socket)
       (with-time *seconds-per-update*
 	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
@@ -577,7 +639,7 @@
 (defun run-daq ()
   "connects a daq agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9556))
-    (multiple-value-setq (bsd-stream bsd-socket) (connect host port))
+    (multiple-value-setq (bsd-stream bsd-socket) (uni-connect host port))
     (while (socket-active-p bsd-socket)
       (dotimes (i 10)
 	(with-time *seconds-per-update*
