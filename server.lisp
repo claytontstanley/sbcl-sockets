@@ -95,6 +95,31 @@
 (defmacro socket-active-p (socket)
   `(and ,socket (sb-bsd-sockets:socket-open-p ,socket)))
 
+(defpun headroom (val) ((hsh (make-hash-table)) (N 1000))
+  (trim-data hsh N)
+  (push val (gethash 'headroom hsh)))
+
+(defmacro print-headroom (&key (strm t))
+  `(with-pandoric (hsh) 'headroom
+     (aif (gethash 'headroom hsh)
+	  (format ,strm "headroom: ~,8f seconds, ~,8f percent~%"
+		  (mean it) (* 100 (/ (mean it) *seconds-per-update*))))))
+
+(define-symbol-macro headroom
+    (print-headroom :strm nil))
+
+(defmacro! with-time (time &body body)
+  "executes body in 'time' seconds; time is intended to be longer than it should take to execute body"
+  `(let* ((,g!start (get-internal-real-time))
+	  (,g!finish (+ (* ,time internal-time-units-per-second) ,g!start))
+	  (,g!time-to-sleep))
+     ,@body
+     (setf ,g!time-to-sleep (/ (- ,g!finish (get-internal-real-time)) internal-time-units-per-second))
+     (headroom ,g!time-to-sleep)
+     (if (< ,g!time-to-sleep 0)
+	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
+	 (sleep ,g!time-to-sleep))))
+
 (defmacro define-job (&key (name) (Fn) (active-p t) (quota 1))
   "discrete event simulator that executes functions at the specified time, 
    when active, you can pass functions to execute after each time the quota is reached
@@ -556,19 +581,6 @@
 
 ;dynamically scoped variable that stores the monitor's bsd-stream
 (defvar *monitor-bsd-stream*)
-
-(defpun headroom (val) ((hsh (make-hash-table)) (N 1000))
-  (trim-data hsh N)
-  (push val (gethash 'headroom hsh)))
-
-(defmacro print-headroom (&key (strm t))
-  `(with-pandoric (hsh) 'headroom
-     (aif (gethash 'headroom hsh)
-	  (format ,strm "headroom: ~,8f seconds, ~,8f percent~%"
-		  (mean it) (* 100 (/ (mean it) *seconds-per-update*))))))
-
-(define-symbol-macro headroom
-    (print-headroom :strm nil))
   
 (defmacro send (form)
   "send is a shorthand for the monitor to send a message to the server;
@@ -586,18 +598,6 @@
 (defmacro send-string-to (agent str)
   "sends string str to agent via server"
   `(send (uni-send-string (get-bsd-stream ,agent) ,str)))
-
-(defmacro! with-time (time &body body)
-  "executes body in 'time' seconds; time is intended to be longer than it should take to execute body"
-  `(let* ((,g!start (get-internal-real-time))
-	  (,g!finish (+ (* ,time internal-time-units-per-second) ,g!start))
-	  (,g!time-to-sleep))
-     ,@body
-     (setf ,g!time-to-sleep (/ (- ,g!finish (get-internal-real-time)) internal-time-units-per-second))
-     (headroom ,g!time-to-sleep)
-     (if (< ,g!time-to-sleep 0)
-	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
-	 (sleep ,g!time-to-sleep))))
 
 (defvar *server-ip* "10.0.1.4") 
 
