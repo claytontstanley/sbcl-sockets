@@ -1,3 +1,2 @@
 file2load=server.lisp
-file2load=uni-files.lisp
 albumBuilder=#'run-display

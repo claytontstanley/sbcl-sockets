@@ -1,5 +1,4 @@
 file2load= server.fasl
-file2load=uni-files.lisp
 file2load= run-server.lisp
 albumBuilder= #'run-server
 
