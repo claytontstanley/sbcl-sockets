@@ -194,6 +194,12 @@
 (defvar *updates-per-second* 60) 
 (defvar *seconds-per-update* (/ 1 *updates-per-second*))
 
+(defmacro! updates/second->quota (o!updates/second)
+  `(progn
+     (assert (<= ,g!updates/second *updates-per-second*) nil 
+	     "updates/second at ~a not less than *updates-per-second* at ~a" ,g!updates/second *updates-per-second*)
+     (aif ,g!updates/second (/ *updates-per-second* it))))
+
 ;////////////////////////////////////////////////////////////
 ;////////////////////////////////////////////////////////////
 ;stuff to make sending/receiving/connecting across sockets easier
@@ -215,7 +221,7 @@
 	       (format t "connecting ~a:~a~%" host port)
 	       (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
 		 (values stream sock)))))
-     :quota (* *updates-per-second* 1))) ;have this plambda fire ~ once every second
+     :quota (updates/second->quota 1))) ;have this plambda fire ~ once every second
 
 (defun uni-connect (host port)
   "attempts to connect to socket on host:port; client-side function
@@ -243,7 +249,7 @@
 	     (awhen (sb-bsd-sockets::socket-accept sock) 
 		    (format t "connecting ~a:~a~%" host port)
 		    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
-       :quota (* *updates-per-second* 1)))) ;have this plambda fire ~ once every second
+       :quota (updates/second->quota 1)))) ;have this plambda fire ~ once every second
 
 (defmacro uni-without-interrupts (&body body)
   `(sb-sys:without-interrupts ,@body))
@@ -513,9 +519,10 @@
   `(uni-send-string (get-bsd-stream ,agent)
 		    (format nil "~a=~a" ,(symbol-name channel) ,val)))
   
-(defmacro add-output-job (&key (agent%) (name%) (output-channel) (quota) (value))
+(defmacro add-output-job (&key (agent%) (name%) (output-channel) (updates/second) (value))
   (let ((agent (aif agent% it (second output-channel)))
-	(name (aif name% it (first output-channel))))
+	(name (aif name% it (first output-channel)))
+	(quota (updates/second->quota updates/second)))
     "adds a job to agent that sends 'value' through the socket when quota is reached"
     `(add-job :agent ,agent
 	      :job (define-job :name ,name ,@(aif quota (list :quota it))
@@ -531,10 +538,11 @@
 		      (aif ,value
 			   (send-output ,@output-channel it))))))
 
-(defmacro add-channel-job (&key (agent%) (name%) (channel) (quota) (value))
+(defmacro add-channel-job (&key (agent%) (name%) (channel) (updates/second) (value))
   "adds a job to agent that pushes 'value' onto channel when quota is reached"
   (let ((agent (aif agent% it (second channel)))
-	(name (aif name% it (first channel))))
+	(name (aif name% it (first channel)))
+	(quota (updates/second->quota updates/second)))
     `(add-job :agent ,agent
 	      :job (define-job :name ,name ,@(aif quota (list :quota it))
 			       :Fn (lambda ()

@@ -21,8 +21,8 @@
 
   ;add a job that queries the DAQ for the current RPM-Raw value, and places it on the RPM-Raw channel 
   (add-channel-job :channel (RPM-Raw DAQ)
-		   :quota 60
-		   :value nil)
+		   :updates/second 1
+		   :value 1)
 		   ;:value (read-register (get-bsd-socket DAQ) 0)
 
   ;add an event that creates a calibrated-channel from the raw-channel, using the discrepency between the measured-channel
