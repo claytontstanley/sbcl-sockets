@@ -1,3 +1,5 @@
+(defvar *cnt* 0)
+
 (defun run-daq ()
   "top-level function that runs the lisp daq server"
 
@@ -20,16 +22,16 @@
     :port 9554)
 
   (add-channel-job :channel (RPM-Raw modbus-DAQ)
-		   :updates/second 1
+		   :updates/second 60
 		   :value (aif (get-channel read-registers-fn modbus-DAQ) 
-			       (funcall it 0)))
+			       (funcall it (mod (incf *cnt*) 10))))
   
   (add-output-event :output-channel (RPM-Raw DAQ)
 		    :trigger-channel (RPM-Raw modbus-DAQ))
 
   (add-event :trigger-channel (send-to-modbus-DAQ DAQ)
 	     :Fn (lambda () (aif (get-channel write-registers-fn modbus-DAQ)
-				 (funcall it (1 (get-channel send-to-modbus-DAQ DAQ :N 1))))))
+				 (funcall it 1 (get-channel send-to-modbus-DAQ DAQ :N 1)))))
 
   ;display all agents and their jobs that will be called each time 'update-call' is called
   (print-agents)

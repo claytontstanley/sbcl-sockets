@@ -290,14 +290,14 @@
 	      (attempt (funcall event)))))
      ,val))
   
-(defmacro make-socket-builder (bsd-stream bsd-socket host port type &rest process-line)
+(defmacro make-socket-builder (host port type &rest process-line)
   "defines a socket that is a pandoric function
    the function has an inner loop that processes all lines currently on the stream
    the way that each line is processed is determined by the code supplied in process-line
    'line' (and any other variable within the scope of this builder) is the anaphor"
   `(let* (;stream that will be used to send & receive messages between the lisp backend & the stream
-	  (bsd-stream ,bsd-stream)
-	  (bsd-socket ,bsd-socket)
+	  (bsd-stream)
+	  (bsd-socket)
 	  (type ',type)
           ;data storing any received messages
 	  (data (make-hash-table :test #'equalp))
@@ -305,13 +305,16 @@
 	  (host ,(aif host (symbol-name it)))
 	  (port ,port)
 	  (N 100)
-	  (uni-socket-Fn (if (and host port) (,(symb 'uni- type '-socket) host port))))
+	  (uni-socket-Fn))
      ;data storing any triggered events
      (setf (gethash "events" data) (make-hash-table :test #'equalp))
      (setf (gethash "socket" data)
 	   (plambda () (bsd-stream bsd-socket data N uni-socket-Fn host port type)
+	     ;if we know where to look for a connection (host:port), but haven't initialized the function that looks for the connection, then init it
+	     (if (and (not uni-socket-Fn) host port)
+		 (setf uni-socket-Fn (,(symb 'uni- type '-socket) host port)))
              ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
-	     (if (and (not bsd-stream) (not bsd-socket) uni-socket-Fn)
+	     (if (and uni-socket-Fn (not bsd-stream) (not bsd-socket))
 		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-socket-Fn)))
 	     ;make sure that all output on the bsd-stream has reached its destination via the bsd-socket
 	     (uni-without-interrupts 
@@ -322,22 +325,22 @@
 	       (while (ignore-errors (listen bsd-stream))
 		 (setf line (uni-socket-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
-		 (if (string-equal line "[QUIT]")
-		     (progn
-		       (if (equal ',type 'client)
-			   (uni-send-string bsd-stream "[QUIT]"))
-		       (if bsd-stream (sb-bsd-sockets::close bsd-stream))
-		       (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
-		       (setf bsd-stream nil)
-		       (setf bsd-socket nil))   
-		     ,@process-line)))))))
+		 (cond ((string-equal line "[QUIT]")
+			(if (equal ',type 'client)
+			    (uni-send-string bsd-stream "[QUIT]"))
+			(if bsd-stream (sb-bsd-sockets::close bsd-stream))
+			(if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
+			(setf bsd-stream nil)
+			(setf bsd-socket nil))
+		       ;run any extra code to process the received line
+		       (t
+			,@process-line))))))))
 
 (defmacro make-socket (&key (host) (port) (type `server))
   "if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
    otherwise, it will eval the line in place"
-  `(make-socket-builder 
-    nil nil ,host ,port ,type
-    (acond ((line2element line)
+  `(make-socket-builder ,host ,port ,type
+     (acond ((line2element line)
 	    (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
 	   (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
 	    (let ((val))
@@ -345,13 +348,37 @@
 	      ;if the caller's socket is still active, return the output to the caller
 	      (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
 
-(defmacro make-modbus-socket (&key (host) (port) (type `server) (agent))
-  `(make-socket-builder
-    nil nil ,host ,port ,type
-    (progn
-      (setf (get-channel read-registers-fn ,agent) (read-registers ,host ,port))
-      (setf (get-channel write-registers-fn ,agent) (write-registers ,host ,port))
-      (remove-job initialize-modbus-port-fn ,agent))))
+(defmacro read-registers (strm)
+  `(let ((strm ,strm))
+     (plambda (&rest registers) (strm)
+       ;stub
+       (car registers))))
+
+(defmacro write-registers (strm)
+  `(let ((strm ,strm))
+     (plambda (registerStart &rest vals) (strm)
+       (declare (ignorable vals registerStart))
+	 ;stub
+	 nil)))
+
+(defmacro make-modbus-socket-initializer (&key (host) (port) (type `server) (agent))
+  `(make-socket-builder ,host ,port ,type
+     ;(remove-job initialize-modbus-port-fn ,(symb agent `-initializer))
+     (kill-agent ,(symb agent `-initializer))
+     ;modbus port will be passed in on 'line'
+     (let ((port ,port))
+       (setf (get-pandoric (get-socket ,agent) 'port) port)
+       (while (not (get-bsd-stream ,agent))
+	 (with-time *seconds-per-update*
+	   (format t "trying to connect to modbus on ~a:~a~%" ,(symbol-name host) ,port)
+	   (funcall (get-socket ,agent))))
+       (setf (get-channel read-registers-fn ,agent) (read-registers (get-bsd-stream ,agent)))
+       (setf (get-channel write-registers-fn ,agent) (write-registers (get-bsd-stream ,agent))))))
+
+(defmacro make-modbus-socket (&key (host) (type `server))
+  ;we don't know the port yet, so set it to nil for now
+  `(make-socket-builder ,host nil ,type
+     (error "read ~a from modbus socket; should not have received anything" line)))
 
 (defmacro define-agent (&key (name) (socket) (host) (port) (type `server))
   "container to store a collection of jobs (in a hash table)
@@ -368,15 +395,15 @@
 
 (defmacro define-modbus-agent (&key (name) (host) (port) (type `server))
   `(progn
-     (define-agent :name ,name :host ,host :port ,port :type ,type
-		   :socket (make-modbus-socket :host ,host :port ,port :type ,type :agent ,name))
-     (add-job :agent ,name
+     (define-agent :name ,(symb name `-initializer) 
+       :socket (make-modbus-socket-initializer :host ,host :port ,port :type ,type :agent ,name))
+     (add-job :agent ,(symb name `-initializer) 
 	      :job (define-job :name initialize-modbus-port-fn :quota (updates/second->quota 1)
 			       :Fn (lambda ()
-				     (if (and (get-bsd-stream ,name)
-					      (not (get-channel read-registers-fn ,name)))
-					 (uni-send-string (get-bsd-stream ,name) "SCAN")))))))
-
+				     (aif (get-bsd-stream ,(symb name `-initializer))
+					  (uni-send-string it "SCAN")))))
+     (define-agent :name ,name :socket (make-modbus-socket :host ,host :type ,type))))
+			
 (defmacro get-socket (agent)
   "returns the agent's socket"
   `(get-pandoric ',agent 'socket))
@@ -473,7 +500,8 @@
 		   (sb-bsd-sockets::close bsd-stream)
 		   (sb-bsd-sockets:socket-close bsd-socket))
 		 (while (socket-active-p bsd-socket)
-		   (funcall (get-pandoric agent 'socket))))))))
+		   (with-time *seconds-per-update*
+		     (funcall (get-pandoric agent 'socket)))))))))
       (kill 
        (lambda (agent)
 	 (with-pandoric (agents) 'agents
@@ -634,20 +662,6 @@
   "sends string str to agent via server"
   `(send (uni-send-string (get-bsd-stream ,agent) ,str)))
 
-(defmacro read-registers (host port)
-  `(let ((host ,(symbol-name host))
-	 (port ,port))
-     (plambda (&rest registers) (host port)
-       ;stub
-       (car registers))))
-
-(defmacro write-registers (host port)
-  `(let ((host ,(symbol-name host))
-	 (port ,port))
-     (plambda (&rest vals)
-	 ;stuf
-	 nil)))
-
 (defvar *server-ip* "127.0.0.1") 
 
 (defun run-monitor (port)
@@ -685,7 +699,7 @@
 	    (sb-bsd-sockets::close bsd-stream)
 	    (sb-bsd-sockets:socket-close bsd-socket)))))))
 
-(defun run-daq ()
+#|(defun run-daq ()
   "connects a daq agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9556))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-connect host port))
@@ -699,7 +713,7 @@
 	(when (string-equal line "[QUIT]")
 	  (uni-send-string bsd-stream "[QUIT]")
 	  (sb-bsd-sockets::close bsd-stream)
-	  (sb-bsd-sockets:socket-close bsd-socket))))))
+	  (sb-bsd-sockets:socket-close bsd-socket))))))|#
 
 ;(setf *break-on-signals* t)
        
