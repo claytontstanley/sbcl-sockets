@@ -1,0 +1,3 @@
+file2load= server.lisp
+albumBuilder= (lambda () (run-monitor 9554))
+

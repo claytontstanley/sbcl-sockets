@@ -1,0 +1,4 @@
+file2load= server.fasl
+file2load= run-daq.lisp
+albumBuilder= #'run-daq
+

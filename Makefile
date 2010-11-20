@@ -1,6 +1,14 @@
 
 all: server
 
+daq2: compile
+	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil daq2-config.txt nil
+
+labjack: compile
+	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil labjack-config.txt nil
+
+monitor2:
+	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil monitor-config2.txt nil
 
 monitor:
 	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil monitor-config.txt nil

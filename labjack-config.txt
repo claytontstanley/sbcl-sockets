@@ -1,0 +1,4 @@
+file2load= server.fasl
+file2load= run-labjack.lisp
+albumBuilder= #'run-labjack
+
