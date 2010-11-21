@@ -336,17 +336,17 @@
 		       (t
 			,@process-line))))))))
 
-(defmacro make-socket (&key (host) (port) (type `server))
+(defmacro make-socket (&key (host) (port) (type `server) (agent))
   "if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
    otherwise, it will eval the line in place"
   `(make-socket-builder ,host ,port ,type
      (acond ((line2element line)
-	    (push (parse-float (cdr it)) (gethash-and-trigger (car it) data)))
-	   (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
-	    (let ((val))
-	      (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
-	      ;if the caller's socket is still active, return the output to the caller
-	      (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
+	     (push (parse-float (cdr it)) (get-channel (car it) ,agent)))
+	    (t ;execute a remote procedure call (RPC); that is, run the message on the server, and return the output to the caller
+	     (let ((val))
+	       (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
+	       ;if the caller's socket is still active, return the output to the caller
+	       (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
 
 (defmacro read-registers (strm)
   `(let ((strm ,strm))
@@ -386,7 +386,7 @@
    execute the functions that have been latched to each job"
   `(progn
      (defpun ,name () ((jobs (make-hash-table))
-		       (socket (aif ,socket it (make-socket :host ,host :port ,port :type ,type))))
+		       (socket (aif ,socket it (make-socket :host ,host :port ,port :type ,type :agent ,name))))
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
      (add-job :agent ,name
@@ -394,15 +394,16 @@
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
 (defmacro define-modbus-agent (&key (name) (host) (port) (type `server))
-  `(progn
-     (define-agent :name ,(symb name `-initializer) 
-       :socket (make-modbus-socket-initializer :host ,host :port ,port :type ,type :agent ,name))
-     (add-job :agent ,(symb name `-initializer) 
-	      :job (define-job :name initialize-modbus-port-fn :quota (updates/second->quota 1)
-			       :Fn (lambda ()
-				     (aif (get-bsd-stream ,(symb name `-initializer))
-					  (uni-send-string it "SCAN")))))
-     (define-agent :name ,name :socket (make-modbus-socket :host ,host :type ,type))))
+  (let ((init-name (symb name `-initializer)))
+    `(progn
+       (define-agent :name ,init-name
+	 :socket (make-modbus-socket-initializer :host ,host :port ,port :type ,type :agent ,name))
+       (add-job :agent ,init-name
+		:job (define-job :name initialize-modbus-port-fn :quota (updates/second->quota 1)
+				 :Fn (lambda ()
+				       (aif (get-bsd-stream ,init-name)
+					    (uni-send-string it "SCAN")))))
+       (define-agent :name ,name :socket (make-modbus-socket :host ,host :type ,type)))))
 			
 (defmacro get-socket (agent)
   "returns the agent's socket"
@@ -418,7 +419,7 @@
 
 (defmacro get-channel (channel% agent &key (N) (from `get-data))
   "returns a channel (or subset of the channel) in the data/event hash table inside the agent's socket"
-  (let ((channel `(gethash-and-trigger ,(symbol-name channel%) (,from ,agent))))
+  (let ((channel `(gethash-and-trigger ,(if (symbolp channel%) (symbol-name channel%) channel%) (,from ,agent))))
     (cond ((not N)
 	   channel)
 	  ((equal N 1)
