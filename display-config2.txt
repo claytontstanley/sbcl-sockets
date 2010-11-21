@@ -1,0 +1,3 @@
+file2load=server.lisp
+file2load=display.lisp
+albumBuilder=#'run-display

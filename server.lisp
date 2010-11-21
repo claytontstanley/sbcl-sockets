@@ -21,8 +21,6 @@
 ;;; 2010.10.11  : Creation.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(require 'sb-bsd-sockets)
-
 (defmacro! acond (&rest clauses)
  "works just like cond, but stores the 
   value of each condition as 'it', which is accessable in the code
@@ -91,9 +89,6 @@
 	 (let ((Ln (+ 1 (length channel)))) 
 	   (while (> (decf Ln) N)
 	     (setf channel (nbutlast channel)))))))
-
-(defmacro socket-active-p (socket)
-  `(and ,socket (sb-bsd-sockets:socket-open-p ,socket)))
 
 (defpun headroom (val) ((hsh (make-hash-table)) (N 1000))
   (trim-data hsh N)
@@ -203,7 +198,12 @@
 ;////////////////////////////////////////////////////////////
 ;stuff to make sending/receiving/connecting across sockets easier
 ;borrowed heavily from uni-files.lisp in the actr6 distribution
+#+:sbcl (require 'sb-bsd-sockets)
 
+(defmacro uni-stream-active-p (stream)
+  `(aif ,stream (open-stream-p it)))
+
+#+:sbcl
 (defmacro uni-client-socket (host port)
   "opens an active socket on host:port; client-side function
    returns a pandoric function that, when called
@@ -223,6 +223,14 @@
 		 (values stream sock)))))
      :quota (updates/second->quota 1))) ;have this plambda fire ~ once every second
 
+#+:ccl
+(defmacro uni-client-socket (host port)
+  `(define-job :name ,(symb `connect- host `- port)
+     :Fn (plambda () ((host ,host)
+		      (port ,port))
+	   (values (make-socket :remote-host host :remote-port port) nil))
+     :quota (updates/second->quota 1)))
+
 (defun uni-connect (host port)
   "attempts to connect to socket on host:port; client-side function
    will hang until a connection is established
@@ -234,6 +242,7 @@
 	(multiple-value-setq (bsd-stream bsd-socket) (funcall uni-client-socket-fn))))
     (values bsd-stream bsd-socket)))
 
+#+:sbcl
 (defmacro uni-server-socket (host port)
   "opens an active socket on host:port; server-side function
    returns a pandoric function that, when called
@@ -251,8 +260,15 @@
 		    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
        :quota (updates/second->quota 1)))) ;have this plambda fire ~ once every second
 
+;TODO: write ccl version of uni-server-socket
+
+#+:sbcl
 (defmacro uni-without-interrupts (&body body)
   `(sb-sys:without-interrupts ,@body))
+
+#+:ccl
+(defmacro uni-without-interrupts (&body body)
+  `(without-interrupts ,@body))
 
 (defun uni-send-string (socket string)
   "sends string down socket; string will have a newline appended if not present already"
@@ -263,10 +279,20 @@
    ;flush socket so that the string is guaranteed to be sent now
    (finish-output socket)))
 
-(defun uni-socket-read-line (stream)
+(defmacro uni-read-line (stream)
   "Read a line terminated by \\n"
-  (read-line stream nil nil))
+  `(read-line ,stream nil nil))
 
+#+:sbcl
+(defun uni-close (bsd-stream &optional bsd-socket)
+  (if bsd-stream (sb-bsd-sockets::close bsd-stream))
+  (if bsd-socket (sb-bsd-sockets:socket-close bsd-socket)))
+
+#+:ccl
+(defun uni-close (bsd-stream &optional bsd-socket)
+  (assert (null bsd-socket) nil "ccl only returns a stream; socket should be nil here")
+  (close bsd-stream))
+  
 (defmacro read-registers (strm)
   "macro builder for read-registers function
    returns a pandoric lexical closure that, when called, will ping the server (through the socket)
@@ -308,7 +334,7 @@
 	      (format t "evaluating event on ~a:~a: ~a~%" host port event)
 	      (attempt (funcall event)))))
      ,val))
-  
+
 (defmacro make-socket-builder (host port type &rest process-line)
   "defines a socket that is a pandoric function
    the function has an inner loop that processes all lines currently on the stream
@@ -342,20 +368,19 @@
 	     (let ((line))
 	       ;update all of the raw data
 	       (while (ignore-errors (listen bsd-stream))
-		 (setf line (uni-socket-read-line bsd-stream))
+		 (setf line (uni-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
 		 (cond ((string-equal line "[QUIT]")
 			(if (equal ',type 'client)
 			    (uni-send-string bsd-stream "[QUIT]"))
-			(if bsd-stream (sb-bsd-sockets::close bsd-stream))
-			(if bsd-socket (sb-bsd-sockets:socket-close bsd-socket))
+			(uni-close bsd-stream bsd-socket)
 			(setf bsd-stream nil)
 			(setf bsd-socket nil))
 		       ;run any extra code to process the received line
 		       (t
 			,@process-line))))))))
 
-(defmacro make-socket (&key (host) (port) (type `server) (agent))
+(defmacro make-standard-socket (&key (host) (port) (type `server) (agent))
   "if a line is of the form 'a=b', it will push the evaled value 'b' onto the channel 'a' in data
    otherwise, it will eval the line in place"
   `(make-socket-builder ,host ,port ,type
@@ -399,7 +424,7 @@
    execute the functions that have been latched to each job"
   `(progn
      (defpun ,name () ((jobs (make-hash-table))
-		       (socket (aif ,socket it (make-socket :host ,host :port ,port :type ,type :agent ,name))))
+		       (socket (aif ,socket it (make-standard-socket :host ,host :port ,port :type ,type :agent ,name))))
        (loop for job being the hash-values of jobs
 	  do (funcall job)))
      (add-job :agent ,name
@@ -510,13 +535,11 @@
 	   (if (or (eq bsd-stream *error-output*)
 		   (eq bsd-stream *standard-output*))
 	       (terminal-reset))
-	   (when (socket-active-p bsd-socket)
+	   (when (uni-stream-active-p bsd-stream)
 	     (uni-send-string bsd-stream "[QUIT]")
 	     (if (equal type 'client)
-		 (progn
-		   (sb-bsd-sockets::close bsd-stream)
-		   (sb-bsd-sockets:socket-close bsd-socket))
-		 (while (socket-active-p bsd-socket)
+		 (uni-close bsd-stream bsd-socket)
+		 (while (uni-stream-active-p bsd-stream)
 		   (with-time *seconds-per-update*
 		     (funcall (get-pandoric agent 'socket)))))))))
       (kill 
@@ -671,11 +694,11 @@
   "sends string str to server"
   `(uni-send-string *monitor-bsd-stream* ,str))
 
-(defmacro send-to (agent form)
+(defmacro send-to-agent (agent form)
   "send a message that's sent first to the server, then bounced to the agent, to be evaled"
   `(send (uni-send-string (get-bsd-stream ,agent) (convert ,form))))
 
-(defmacro send-string-to (agent str)
+(defmacro send-string-to-agent (agent str)
   "sends string str to agent via server"
   `(send (uni-send-string (get-bsd-stream ,agent) ,str)))
 
@@ -686,25 +709,24 @@
   (let* ((bsd-socket) (bsd-stream) (line) (host *server-ip*))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-connect host port))
     (setf *monitor-bsd-stream* bsd-stream)
-    (while (socket-active-p bsd-socket)
+    (while (uni-stream-active-p bsd-stream)
       (with-time *seconds-per-update*
 	(if (listen) (attempt (eval (read))))
-	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
-	  (setf line (read-line bsd-stream))
+	(while (and (uni-stream-active-p bsd-stream) (listen bsd-stream))
+	  (setf line (uni-read-line bsd-stream))
 	  (format t "received on ~a:~a: ~a~%" host port line)
 	  (when (string-equal line "[QUIT]")
 	    (uni-send-string bsd-stream "[QUIT]")
-	    (sb-bsd-sockets::close bsd-stream)
-	    (sb-bsd-sockets:socket-close bsd-socket)))))))
-  
+	    (uni-close bsd-stream bsd-socket)))))))
+
 (defun run-display ()
   "connects a display agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9557))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-connect host port))
-    (while (socket-active-p bsd-socket)
+    (while (uni-stream-active-p bsd-stream)
       (with-time *seconds-per-update*
-	(while (and (socket-active-p bsd-socket) (listen bsd-stream))
-	  (setf line (read-line bsd-stream))
+	(while (and (uni-stream-active-p bsd-stream) (listen bsd-stream))
+	  (setf line (uni-read-line bsd-stream))
 	  (format t "received on ~a:~a: ~a~%" host port line)
 	  (aif (line2element line)
 	       (if (equalp (car it) "rpm-raw")
@@ -713,24 +735,22 @@
 							  (- (/ (random 1000) 10000) .05))))))
 	  (when (string-equal line "[QUIT]")
 	    (uni-send-string bsd-stream "[QUIT]")
-	    (sb-bsd-sockets::close bsd-stream)
-	    (sb-bsd-sockets:socket-close bsd-socket)))))))
+	    (uni-close bsd-stream bsd-socket)))))))
 
-#|(defun run-daq ()
+(defun run-daq ()
   "connects a daq agent to the server"
   (let ((bsd-socket) (bsd-stream) (line) (host *server-ip*) (port 9556))
     (multiple-value-setq (bsd-stream bsd-socket) (uni-connect host port))
-    (while (socket-active-p bsd-socket)
+    (while (uni-stream-active-p bsd-stream)
       (dotimes (i 10)
 	(with-time *seconds-per-update*
 	  (uni-send-string bsd-stream (format nil "RPM-Raw=~a" i))))
-      (while (and (socket-active-p bsd-socket) (listen bsd-stream))
-	(setf line (read-line bsd-stream))
+      (while (and (uni-stream-active-p bsd-stream) (listen bsd-stream))
+	(setf line (uni-read-line bsd-stream))
 	(format t "received on ~a:~a: ~a~%" host port line)
 	(when (string-equal line "[QUIT]")
 	  (uni-send-string bsd-stream "[QUIT]")
-	  (sb-bsd-sockets::close bsd-stream)
-	  (sb-bsd-sockets:socket-close bsd-socket))))))|#
+	  (uni-close bsd-stream bsd-socket))))))
 
 ;(setf *break-on-signals* t)
        
