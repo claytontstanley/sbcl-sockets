@@ -135,10 +135,16 @@
 	       `(progn
 		  (get-agent ,names :strings ,strings)
 		  (check
-		   (string-equal
-		    (with-output-to-string (*standard-output*)
-		      (the-managers))
-		    (format nil "~{~a~%~}" ',strings))))))
+		   (equal
+		    (sort
+		     (get-lines
+		      (with-output-to-string (*standard-output*)
+			(the-managers)))
+		     #'string<)
+		    (sort
+		     (get-lines
+		      (format nil "~{~a~%~}" ',strings))
+		     #'string<))))))
     (test-definition (name name2) ("hello" "hello2"))
     (test-definition (name) ("hello2"))
     (test-definition (name1 name2 name3) ("output1" "output2" "output3"))
@@ -184,12 +190,20 @@
   (macrolet ((check-update-agent (names)
 	       `(progn
 		  (get-agent ,names)
+		  (format t "~%~%~%")
 		  (check
-		   (string-equal
-		    (with-output-to-string (*standard-output*)
-		      (update-agent the-managers))
-		    (format nil "~{~a~%~}" (list ,@(mapcar #'symbol-name names))))))))
+		   (equal
+		    (sort
+		     (get-lines
+		      (with-output-to-string (*standard-output*)
+			(update-agent the-managers)))
+		     #'string<)
+		    (sort
+		     (get-lines
+		      (format nil "~{~a~%~}" (list ,@(mapcar #'symbol-name names))))
+		     #'string<))))))
     (check-update-agent (one two three four))
+    (check-update-agent (four three one))
     (check-update-agent ())
     (check-update-agent (hello))))
 
