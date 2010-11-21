@@ -124,17 +124,16 @@
   "discrete event simulator that executes functions at the specified time, 
    when active, you can pass functions to execute after each time the quota is reached
    the functioned returned is pandoric, so you can access/change state variables"
-    `(let ((quota ,quota)
-	   (quot 0)
-	   (name ',name)
-	   (active ,active-p)
-	   (Fn ,Fn))
-       (plambda () (name quot quota active Fn)
-	 (when active
-	   (incf quot)
-	   (when (eq quot quota)
-	     (setf quot 0)
-	     (attempt (funcall Fn)))))))
+  `(plambda () ((name ',name)
+		(quot 0)
+		(quota ,quota)
+		(active ,active-p)
+		(Fn ,Fn))
+     (when active
+       (incf quot)
+       (when (eq quot quota)
+	 (setf quot 0)
+	 (attempt (funcall Fn))))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
@@ -210,7 +209,8 @@
    returns a pandoric function that, when called
    attempts to open and then return a stream and socket for communicating over the connection"
   `(define-job :name ,(symb `connect- host `- port)
-     :Fn (plambda () (host port)
+     :Fn (plambda () ((host ,host) 
+		      (port ,port))
 	   (block try
 	     (let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp)))	 
 	       (attempt (sb-bsd-sockets::socket-connect sock (sb-bsd-sockets::make-inet-address ,host) ,port)
@@ -266,6 +266,25 @@
 (defun uni-socket-read-line (stream)
   "Read a line terminated by \\n"
   (read-line stream nil nil))
+
+(defmacro read-registers (strm)
+  "macro builder for read-registers function
+   returns a pandoric lexical closure that, when called, will ping the server (through the socket)
+   to request current values at each register provided as an argument; returns floating-point
+   values for each register"
+  `(plambda (&rest registers) ((strm ,strm))
+     ;stub
+     (car registers)))
+
+(defmacro write-registers (strm)
+  "macro builder for write-registers function
+   returns a pandoric lexical closure that, when called, will send the floating-point values
+   provided as arguments down the socket, to arrive at the array of registers (designated by registerStart)
+   on the DAQ"
+  `(plambda (registerStart &rest vals) ((strm ,strm))
+     (declare (ignorable vals registerStart))
+     ;stub
+     nil))
 
 ;////////////////////////////////////////////////////////////
 ;///////////////////////////////////////////end socket stuff
@@ -347,27 +366,6 @@
 	       (setf val (attempt (eval (read-from-string line)) :on-error (format nil "error: ~a~%" condition)))
 	       ;if the caller's socket is still active, return the output to the caller
 	       (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
-
-(defmacro read-registers (strm)
-  "macro builder for read-registers function
-   returns pandoric function that, when called, will ping the server (through the socket)
-   to request current values at each register provided as an argument; returns floating-point
-   values for each register"
-  `(let ((strm ,strm))
-     (plambda (&rest registers) (strm)
-       ;stub
-       (car registers))))
-
-(defmacro write-registers (strm)
-  "macro builder for write-registers function
-   returns a pandoric function that, when called, will send the floating-point values
-   provided as arguments down the socket, to arrive at the array of registers (designated by registerStart)
-   on the DAQ"
-  `(let ((strm ,strm))
-     (plambda (registerStart &rest vals) (strm)
-       (declare (ignorable vals registerStart))
-	 ;stub
-	 nil)))
 
 (defmacro make-modbus-socket-initializer (&key (host) (port) (type `server) (agent))
   "builds a socket that is waiting for the first string returned through the socket
