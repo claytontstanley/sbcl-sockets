@@ -349,12 +349,20 @@
 	       (attempt (uni-send-string bsd-stream (format nil "~a" val))))))))
 
 (defmacro read-registers (strm)
+  "macro builder for read-registers function
+   returns pandoric function that, when called, will ping the server (through the socket)
+   to request current values at each register provided as an argument; returns floating-point
+   values for each register"
   `(let ((strm ,strm))
      (plambda (&rest registers) (strm)
        ;stub
        (car registers))))
 
 (defmacro write-registers (strm)
+  "macro builder for write-registers function
+   returns a pandoric function that, when called, will send the floating-point values
+   provided as arguments down the socket, to arrive at the array of registers (designated by registerStart)
+   on the DAQ"
   `(let ((strm ,strm))
      (plambda (registerStart &rest vals) (strm)
        (declare (ignorable vals registerStart))
@@ -362,6 +370,9 @@
 	 nil)))
 
 (defmacro make-modbus-socket-initializer (&key (host) (port) (type `server) (agent))
+  "builds a socket that is waiting for the first string returned through the socket
+   this string will contain information about the modbus connection (port, SN)
+   takes this information and builds read/write registers functions, and stores them in agent 'agent"
   `(make-socket-builder ,host ,port ,type
      ;(remove-job initialize-modbus-port-fn ,(symb agent `-initializer))
      (kill-agent ,(symb agent `-initializer))
@@ -376,6 +387,10 @@
        (setf (get-channel write-registers-fn ,agent) (write-registers (get-bsd-stream ,agent))))))
 
 (defmacro make-modbus-socket (&key (host) (type `server))
+  "builds a modbus-style socket
+   modbus sockets send/recieve information completely outside of the socket's inner loop
+   (using read/write registers methods stored in the sockets data hash table)
+   so if a modbus socket receives something sent down the stream while in the inner loop, it should error"
   ;we don't know the port yet, so set it to nil for now
   `(make-socket-builder ,host nil ,type
      (error "read ~a from modbus socket; should not have received anything" line)))
@@ -394,6 +409,9 @@
      (push-to-end ',name (get-pandoric 'agents 'agents))))
 
 (defmacro define-modbus-agent (&key (name) (host) (port) (type `server))
+  "a modbus-style agent; builds two agents; one responsible for communicating with the daq to get the port location
+   of the modbus socket; the second is responsible for sending/receiving information through that modbus socket
+   the first agent is killed after relaying port information to the second agent (see 'make-modbus-socket-initializer above)"
   (let ((init-name (symb name `-initializer)))
     `(progn
        (define-agent :name ,init-name
