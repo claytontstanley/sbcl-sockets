@@ -241,7 +241,7 @@
       (with-time *seconds-per-update*
 	(multiple-value-setq (bsd-stream bsd-socket) (funcall uni-client-socket-fn))))
     (values bsd-stream bsd-socket)))
-
+  
 #+:sbcl
 (defmacro uni-server-socket (host port)
   "opens an active socket on host:port; server-side function
@@ -260,7 +260,16 @@
 		    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
        :quota (updates/second->quota 1)))) ;have this plambda fire ~ once every second
 
-;TODO: write ccl version of uni-server-socket
+#+:ccl
+(defmacro uni-server-socket (host port)
+  `(let ((sock (make-socket :local-host host :local-port port :connect :passive)))
+     (define-job :name ,(symb `connect- host `- port)
+       :Fn (plambda () ((host ,host)
+			(port ,port))
+	     (awhen (accept-connection sock :wait nil)
+	       (format t "connecting ~a:~a~%" host port)
+	       (values it nil)))
+       :quota (updates/second->quota 1))))
 
 #+:sbcl
 (defmacro uni-without-interrupts (&body body)

@@ -21,6 +21,10 @@ monitor:
 server: compile
 	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil server-config.txt nil
 
+#main server running ccl64
+server-ccl:
+	ccl64 --load letf.lisp -- nil server-config-ccl.txt nil
+
 #compiles server.lisp -> server.fasl
 compile:
 	sbcl --noinform --noprint --disable-debugger --load letf.lisp nil server-compile.txt nil
