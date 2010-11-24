@@ -38,12 +38,6 @@
   "squares something"
   `(* ,g!x ,g!x))
 
-(defmacro attempt (form &key (on-error `(format t "error: ~a~%" condition)))
-  "anaphoric macro for attemping to evaluate form; default is to print error to screen on error"
-  `(handler-case ,form (error (condition) 
-			 (declare (ignorable condition))
-			 ,on-error)))
-
 (defmacro with-gensyms ((&rest names) &body body)
   "paul graham's with-gensyms"
   `(let ,(loop for n in names collect `(,n (gensym)))
