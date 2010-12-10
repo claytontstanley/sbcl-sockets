@@ -237,21 +237,29 @@
     (values bsd-stream bsd-socket)))
   
 #+:sbcl
-(defmacro uni-server-socket (host port)
+(defmacro! uni-server-socket (host port)
   "opens an active socket on host:port; server-side function
    returns a pandoric function that, when called
    attempts to open and then return a stream and socket for communicating over the connection"
-  `(let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
+  `(let ((sock)
 	 (host ,host)
-	 (port ,port))
-     (setf (sb-bsd-sockets:non-blocking-mode sock) t)
-     (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
-     (sb-bsd-sockets::socket-listen sock 5)
+	 (port ,port)
+	 (,g!init-sock))
+     (setf ,g!init-sock (lambda ()
+			  (setf sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
+			  (setf (sb-bsd-sockets:non-blocking-mode sock) t)
+			  (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
+			  (sb-bsd-sockets::socket-listen sock 5)
+			  nil))
+     (funcall ,g!init-sock)
      (define-job :name ,(symb `accept- host `- port) 
        :Fn (plambda () (sock host port)
-	     (awhen (sb-bsd-sockets::socket-accept sock) 
-		    (format t "connecting ~a:~a~%" host port)
-		    (values (sb-bsd-sockets::socket-make-stream it :input t :output t) it)))
+	     (format t "listening with sock/host/port ~a/~a/~a~%" sock host port)
+	     (attempt
+	      (awhen (sb-bsd-sockets::socket-accept sock) 
+		(format t "connecting ~a:~a~%" host port)
+		(values (sb-bsd-sockets::socket-make-stream it :input t :output t) it))
+	      :on-error (funcall ,g!init-sock)))
        :quota (updates/second->quota 1)))) ;have this plambda fire ~ once every second
 
 #+:ccl
@@ -540,11 +548,15 @@
 	       (terminal-reset))
 	   (when (uni-stream-active-p bsd-stream)
 	     (uni-send-string bsd-stream "[QUIT]")
-	     (if (equal type 'client)
-		 (uni-close bsd-stream bsd-socket)
-		 (while (uni-stream-active-p bsd-stream)
-		   (with-time *seconds-per-update*
-		     (funcall (get-pandoric agent 'socket)))))))))
+	     (cond ((equal type 'client)
+		    (uni-close bsd-stream bsd-socket)
+		    (setf bsd-stream nil)
+		    (setf bsd-socket nil))
+		   ((equal type 'server)
+		    (while (uni-stream-active-p bsd-stream)
+		      (with-time *seconds-per-update*
+			(funcall (get-pandoric agent 'socket)))))
+		   (t (error "shouldn't get here")))))))
       (kill 
        (lambda (agent)
 	 (with-pandoric (agents) 'agents
@@ -570,13 +582,35 @@
   (defmacro! disconnect-agents ()
     "attempts to cleanly close all agents' sockets"
     `(dolist (,g!agent (get-pandoric 'agents 'agents))
-       (funcall ,disconnect ,g!agent))))
+       (funcall ,disconnect ,g!agent)))
+  
+  #+:sbcl
+  (defmacro! save-agents ()
+    `(progn
+       (dolist (,g!agent (get-pandoric 'agents 'agents))
+	 (funcall ,disconnect ,g!agent))
+       (sb-ext:save-lisp-and-die "saved.core" :toplevel 'run :purify t)))
+
+  )
+
+(defun run ()
+  ;update-agents keeps getting called until there are no agents left to update
+  ;agents can be removed by evaling (kill-agent agent), or (kill-agents)
+  ;currently, the monitor sends a "(kill-agents)" RPC message to the server, which
+  ;clears all the agents, which then causes this while loop to exit
+  (while (get-pandoric 'agents 'agents)
+    (with-time (/ 1 *updates-per-second*) ;updating 60x/second
+      (update-agents))))
 
 (define-symbol-macro kill 
     (kill-agents))
 
 (define-symbol-macro disconnect
     (disconnect-agents))
+
+#+:sbcl
+(define-symbol-macro save
+    (save-agents))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
   "adds an event Fn to the trigger-channel"
