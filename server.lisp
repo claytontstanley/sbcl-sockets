@@ -366,6 +366,7 @@
      (setf (gethash "events" data) (make-hash-table :test #'equalp))
      (setf (gethash "socket" data)
 	   (plambda () (bsd-stream bsd-socket data N uni-socket-Fn host port type)
+	     ;(format t "stream/socket ~a/~a~%" bsd-stream bsd-socket)
 	     ;if we know where to look for a connection (host:port), but haven't initialized the function that looks for the connection, then init it
 	     (if (and (not uni-socket-Fn) host port)
 		 (setf uni-socket-Fn (,(symb 'uni- type '-socket) host port)))
@@ -378,7 +379,9 @@
 	     (trim-data data N)
 	     (let ((line))
 	       ;update all of the raw data
-	       (while (ignore-errors (listen bsd-stream))
+	       ;FIXME; not sure why I wrapped this in an ignore-errors previously, but it doesn't look like it needs it any more
+	       ;(while (ignore-errors (listen bsd-stream))
+	       (while (listen bsd-stream)
 		 (setf line (uni-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
 		 (cond ((string-equal line "[QUIT]")
@@ -589,15 +592,13 @@
     `(progn
        (dolist (,g!agent (get-pandoric 'agents 'agents))
 	 (funcall ,disconnect ,g!agent))
-       (sb-ext:save-lisp-and-die "saved.core" :toplevel 'run :purify t)))
-
-  )
+       (sb-ext:save-lisp-and-die "saved.core" :toplevel 'run :purify t))))
 
 (defun run ()
-  ;update-agents keeps getting called until there are no agents left to update
-  ;agents can be removed by evaling (kill-agent agent), or (kill-agents)
-  ;currently, the monitor sends a "(kill-agents)" RPC message to the server, which
-  ;clears all the agents, which then causes this while loop to exit
+  "update-agents keeps getting called until there are no agents left to update
+   agents can be removed by evaling (kill-agent agent), or (kill-agents)
+   currently, the monitor sends a \"(kill-agents)\" RPC message to the server, which
+   clears all the agents, which then causes this while loop to exit"
   (while (get-pandoric 'agents 'agents)
     (with-time (/ 1 *updates-per-second*) ;updating 60x/second
       (update-agents))))

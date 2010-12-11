@@ -34,4 +34,5 @@
   ;display all agents and their jobs that will be called each time 'update-call' is called
   (print-agents)
 
+  ;run until all agents have been killed
   (run))
