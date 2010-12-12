@@ -113,16 +113,16 @@
   "discrete event simulator that executes functions at the specified time, 
    when active, you can pass functions to execute after each time the quota is reached
    the functioned returned is pandoric, so you can access/change state variables"
-  `(plambda () ((name ',name)
-		(quot 0)
-		(quota ,quota)
-		(active ,active-p)
-		(Fn ,Fn))
+  `(plambda (&rest args) ((name ',name)
+			  (quot 0)
+			  (quota ,quota)
+			  (active ,active-p)
+			  (Fn ,Fn))
      (when active
        (incf quot)
        (when (eq quot quota)
 	 (setf quot 0)
-	 (attempt (funcall Fn))))))
+	 (attempt (apply Fn args))))))
 
 (defmacro add-job (&key (job) (agent))
   "adds job to agent; errors if already present"
@@ -180,6 +180,7 @@
 
 ;stores the refresh rate of various loops in the system
 (defvar *updates-per-second* 60) 
+(defvar *updates-per-minute* (* *updates-per-second* 60))
 (defvar *seconds-per-update* (/ 1 *updates-per-second*))
 
 (defmacro! updates/second->quota (o!updates/second)
@@ -187,6 +188,12 @@
      (assert (<= ,g!updates/second *updates-per-second*) nil 
 	     "updates/second at ~a not less than *updates-per-second* at ~a" ,g!updates/second *updates-per-second*)
      (aif ,g!updates/second (/ *updates-per-second* it))))
+
+(defmacro! updates/minute->quota (o!updates/minute)
+  `(progn
+     (assert (<= ,g!updates/minute *updates-per-minute*) nil
+	     "updates/minute at ~a not less than *updates-per-minute* at ~a" ,g!updates/minute *updates-per-minute*)
+     (aif ,g!updates/minute (/ *updates-per-minute* it))))
 
 ;////////////////////////////////////////////////////////////
 ;////////////////////////////////////////////////////////////
@@ -261,6 +268,14 @@
 		(values (sb-bsd-sockets::socket-make-stream it :input t :output t) it))
 	      :on-error (funcall ,g!init-sock)))
        :quota (updates/second->quota 1)))) ;have this plambda fire ~ once every second
+
+(defmacro uni-broken-pipe-p ()
+  `(define-job :name uni-broken-pipe-p
+     :Fn (lambda (bsd-stream)
+	   (attempt
+	    (progn (uni-send-string bsd-stream "PING") nil)
+	    :on-error t))
+     :quota (updates/minute->quota 10)))
 
 #+:ccl
 (defmacro uni-server-socket (host port)
@@ -361,18 +376,23 @@
 	  (host ,(aif host (symbol-name it)))
 	  (port ,port)
 	  (N 100)
-	  (uni-socket-Fn))
+	  (uni-socket-Fn)
+	  (uni-broken-pipe-p-Fn (uni-broken-pipe-p)))
      ;data storing any triggered events
      (setf (gethash "events" data) (make-hash-table :test #'equalp))
      (setf (gethash "socket" data)
 	   (plambda () (bsd-stream bsd-socket data N uni-socket-Fn host port type)
-	     ;(format t "stream/socket ~a/~a~%" bsd-stream bsd-socket)
+	     ;(format t "stream/socket/open-p ~a/~a/~a~%" bsd-stream bsd-socket (aif bsd-socket (sb-bsd-sockets:socket-open-p it)))
 	     ;if we know where to look for a connection (host:port), but haven't initialized the function that looks for the connection, then init it
 	     (if (and (not uni-socket-Fn) host port)
 		 (setf uni-socket-Fn (,(symb 'uni- type '-socket) host port)))
              ;if there's not a socket connection currently, and we have a way to look for a connection, then look for it
 	     (if (and uni-socket-Fn (not bsd-stream) (not bsd-socket))
 		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-socket-Fn)))
+	     ;if there is a socket connection, then make sure the connection is still active; if it's not, then throw out the socket
+	     (when (and bsd-stream bsd-socket (funcall uni-broken-pipe-p-Fn bsd-stream))
+	       (setf bsd-stream nil)
+	       (setf bsd-socket nil))
 	     ;make sure that all output on the bsd-stream has reached its destination via the bsd-socket
 	     (uni-without-interrupts 
 	      (finish-output bsd-stream))
@@ -384,6 +404,8 @@
 	       (while (listen bsd-stream)
 		 (setf line (uni-read-line bsd-stream))
 		 (format t "received on ~a:~a: ~a~%" host port line)
+		 ;we received something across the socket, so it's still active; so reset the quota on the uni-broken-pipe-p-Fn job
+		 (setf (get-pandoric uni-broken-pipe-p-Fn 'quot) 0)
 		 (cond ((string-equal line "[QUIT]")
 			(if (equal ',type 'client)
 			    (uni-send-string bsd-stream "[QUIT]"))
