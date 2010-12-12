@@ -269,7 +269,9 @@
 	      :on-error (funcall ,g!init-sock)))
        :quota (updates/second->quota 1)))) ;have this plambda fire ~ once every second
 
+;FIXME; find a way to check for a broken pipe without having to send a message across the socket
 (defmacro uni-broken-pipe-p ()
+  "checks if the socket pipe has been broken, by sending a message across the socket"
   `(define-job :name uni-broken-pipe-p
      :Fn (lambda (bsd-stream)
 	   (attempt
