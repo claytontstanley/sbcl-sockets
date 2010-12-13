@@ -271,7 +271,10 @@
 
 ;FIXME; find a way to check for a broken pipe without having to send a message across the socket
 (defmacro uni-broken-pipe-p ()
-  "checks if the socket pipe has been broken, by sending a message across the socket"
+  "checks if the socket pipe has been broken;
+   returns a pandoric function that, when called,
+   tries to send PING down the socket; 
+   if the send doesn't error out -> the pipe isn't broken"
   `(define-job :name uni-broken-pipe-p
      :Fn (lambda (bsd-stream)
 	   (attempt
@@ -384,7 +387,7 @@
      (setf (gethash "events" data) (make-hash-table :test #'equalp))
      (setf (gethash "socket" data)
 	   (plambda () (bsd-stream bsd-socket data N uni-socket-Fn host port type)
-	     ;(format t "stream/socket/open-p ~a/~a/~a~%" bsd-stream bsd-socket (aif bsd-socket (sb-bsd-sockets:socket-open-p it)))
+	     (format t "stream/socket/active-p ~a/~a/~a~%" bsd-stream bsd-socket (uni-stream-active-p bsd-stream))
 	     ;if we know where to look for a connection (host:port), but haven't initialized the function that looks for the connection, then init it
 	     (if (and (not uni-socket-Fn) host port)
 		 (setf uni-socket-Fn (,(symb 'uni- type '-socket) host port)))
