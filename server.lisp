@@ -209,7 +209,8 @@
   "opens an active socket on host:port; client-side function
    returns a pandoric function that, when called
    attempts to open and then return a stream and socket for communicating over the connection"
-  `(define-job :name ,(symb `connect- host `- port)
+  `(define-job :name ,(symb `connect- host `- port) 
+     :quota (updates/second->quota 1) ;have this plambda fire ~ once every second
      :Fn (plambda () ((host ,host) 
 		      (port ,port))
 	   (block try
@@ -221,16 +222,15 @@
 				    (return-from try (values nil nil))))
 	       (format t "connecting ~a:~a~%" host port)
 	       (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
-		 (values stream sock)))))
-     :quota (updates/second->quota 1))) ;have this plambda fire ~ once every second
+		 (values stream sock)))))))
 
 #+:ccl
 (defmacro uni-client-socket (host port)
-  `(define-job :name ,(symb `connect- host `- port)
+  `(define-job :name ,(symb `connect- host `- port) 
+     :quota (updates/second->quota 1)
      :Fn (plambda () ((host ,host)
 		      (port ,port))
-	   (values (make-socket :remote-host host :remote-port port) nil))
-     :quota (updates/second->quota 1)))
+	   (values (make-socket :remote-host host :remote-port port) nil))))
 
 (defun uni-connect (host port)
   "attempts to connect to socket on host:port; client-side function
@@ -260,14 +260,14 @@
 			  nil))
      (funcall ,g!init-sock)
      (define-job :name ,(symb `accept- host `- port) 
+       :quota (updates/second->quota 1) ;have this plambda fire ~ once every second
        :Fn (plambda () (sock host port)
 	     (format t "listening with sock/host/port ~a/~a/~a~%" sock host port)
 	     (attempt
 	      (awhen (sb-bsd-sockets::socket-accept sock) 
 		(format t "connecting ~a:~a~%" host port)
 		(values (sb-bsd-sockets::socket-make-stream it :input t :output t) it))
-	      :on-error (funcall ,g!init-sock)))
-       :quota (updates/second->quota 1)))) ;have this plambda fire ~ once every second
+	      :on-error (funcall ,g!init-sock))))))
 
 ;FIXME; find a way to check for a broken pipe without having to send a message across the socket
 (defmacro uni-broken-pipe-p ()
@@ -276,22 +276,22 @@
    tries to send PING down the socket; 
    if the send doesn't error out -> the pipe isn't broken"
   `(define-job :name uni-broken-pipe-p
+     :quota (updates/minute->quota 10)
      :Fn (lambda (bsd-stream)
 	   (attempt
 	    (progn (uni-send-string bsd-stream "PING") nil)
-	    :on-error t))
-     :quota (updates/minute->quota 10)))
+	    :on-error t))))
 
 #+:ccl
 (defmacro uni-server-socket (host port)
   `(let ((sock (make-socket :local-host host :local-port port :connect :passive)))
      (define-job :name ,(symb `connect- host `- port)
+       :quota (updates/second->quota 1)
        :Fn (plambda () ((host ,host)
 			(port ,port))
 	     (awhen (accept-connection sock :wait nil)
 	       (format t "connecting ~a:~a~%" host port)
-	       (values it nil)))
-       :quota (updates/second->quota 1))))
+	       (values it nil))))))
 
 #+:sbcl
 (defmacro uni-without-interrupts (&body body)
@@ -481,10 +481,11 @@
        (define-agent :name ,init-name
 	 :socket (make-modbus-socket-initializer :host ,host :port ,port :type ,type :agent ,name))
        (add-job :agent ,init-name
-		:job (define-job :name initialize-modbus-port-fn :quota (updates/second->quota 1)
-				 :Fn (lambda ()
-				       (aif (get-bsd-stream ,init-name)
-					    (uni-send-string it "SCAN")))))
+		:job (define-job :name initialize-modbus-port-fn 
+		       :quota (updates/second->quota 1)
+		       :Fn (lambda ()
+			     (aif (get-bsd-stream ,init-name)
+				  (uni-send-string it "SCAN")))))
        (define-agent :name ,name :socket (make-modbus-socket :host ,host :type ,type)))))
 			
 (defmacro get-socket (agent)
@@ -679,11 +680,12 @@
 	(quota (updates/second->quota updates/second)))
     "adds a job to agent that sends 'value' through the socket when quota is reached"
     `(add-job :agent ,agent
-	      :job (define-job :name ,name ,@(aif quota (list :quota it))
-			       :Fn (lambda ()
-				     (aif ,value
-					  (send-output ,@output-channel it)))))))
-  
+	      :job (define-job :name ,name 
+		     ,@(aif quota (list :quota it))
+		     :Fn (lambda ()
+			   (aif ,value
+				(send-output ,@output-channel it)))))))
+
 (defmacro add-output-event (&key (trigger-channel) (output-channel) (value%))
   "adds an event to agent that sends 'value' through the socket when trigger-channel is updated"
   (let ((value (aif value% it `(get-channel ,@trigger-channel :N 1))))
@@ -698,10 +700,11 @@
 	(name (aif name% it (first channel)))
 	(quota (updates/second->quota updates/second)))
     `(add-job :agent ,agent
-	      :job (define-job :name ,name ,@(aif quota (list :quota it))
-			       :Fn (lambda ()
-				     (aif ,value
-					  (push it (get-channel ,@channel))))))))
+	      :job (define-job :name ,name 
+		     ,@(aif quota (list :quota it))
+		     :Fn (lambda ()
+			   (aif ,value
+				(push it (get-channel ,@channel))))))))
 
 ;TODO: might want to define add-channel-event...
   
