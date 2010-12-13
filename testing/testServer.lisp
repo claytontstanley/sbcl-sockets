@@ -8,13 +8,6 @@
 		 `(add-job :agent ,agent :job (define-job :name ,name :Fn (lambda () (format t "~a~%" ,string)))))
 		 names strings)))
 
-(defmacro! errors-p (form)
-  `(handler-case
-       (progn
-	 ,form
-	 nil)
-     (error (,g!condition) (declare (ignore ,g!condition)) t)))
-
 (defmacro check-for-error (names form should-error)
   `(progn
      (get-agent ,names)

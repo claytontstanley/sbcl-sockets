@@ -38,6 +38,12 @@
   "squares something"
   `(* ,g!x ,g!x))
 
+(defmacro errors-p (&body body)
+  "attempts to evaluate body; returns t/nil if eval threw and exception or not"
+  `(attempt
+    (progn ,@body nil)
+    :on-error t))
+
 (defmacro with-gensyms ((&rest names) &body body)
   "paul graham's with-gensyms"
   `(let ,(loop for n in names collect `(,n (gensym)))
@@ -278,9 +284,7 @@
   `(define-job :name uni-broken-pipe-p
      :quota (updates/minute->quota 10)
      :Fn (lambda (bsd-stream)
-	   (attempt
-	    (progn (uni-send-string bsd-stream "PING") nil)
-	    :on-error t))))
+	   (errors-p (uni-send-string bsd-stream "PING")))))
 
 #+:ccl
 (defmacro uni-server-socket (host port)
