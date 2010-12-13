@@ -21,19 +21,6 @@
 ;;; 2010.10.11  : Creation.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defmacro! acond (&rest clauses)
- "works just like cond, but stores the 
-  value of each condition as 'it', which is accessable in the code
-  following the condition"
-    (if clauses
-	(let ((cl1 (car clauses)))
-	  `(let ((,g!sym ,(car cl1)))
-	     (if ,g!sym
-		 (let ((it ,g!sym)) 
-		   (declare (ignorable it)) 
-		   ,@(cdr cl1))
-		 (acond ,@(cdr clauses)))))))
-
 (defmacro! square (o!x)
   "squares something"
   `(* ,g!x ,g!x))
@@ -103,14 +90,16 @@
 (define-symbol-macro headroom
     (print-headroom :strm nil))
 
+(defmacro! return-time (&body body)
+  "evaluates body, and returns time (in seconds) it took to evaluate body"
+  `(let ((,g!start (get-internal-real-time)))
+     ,@body
+     (/ (- (get-internal-real-time) ,g!start) internal-time-units-per-second)))
+
 (defmacro! with-time (time &body body)
   "executes body in 'time' seconds; time is intended to be longer than it should take to execute body"
-  `(let* ((,g!start (get-internal-real-time))
-	  (,g!finish (+ (* ,time internal-time-units-per-second) ,g!start))
-	  (,g!time-to-sleep))
-     ,@body
-     (setf ,g!time-to-sleep (/ (- ,g!finish (get-internal-real-time)) internal-time-units-per-second))
-     (headroom ,g!time-to-sleep)
+  `(let ((,g!time-to-sleep))
+     (setf ,g!time-to-sleep (- ,time (return-time ,@body)))
      (if (< ,g!time-to-sleep 0)
 	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
 	 (sleep ,g!time-to-sleep))))

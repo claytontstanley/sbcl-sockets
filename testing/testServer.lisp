@@ -11,7 +11,9 @@
 (defmacro check-for-error (names form should-error)
   `(progn
      (get-agent ,names)
-     (check (equal (errors-p ,form) ,should-error))))
+     (if ,should-error
+	 (check (errors-p ,form))
+	 (check (not (errors-p ,form))))))
 
 (deftest test-define-job ()
   (macrolet ((test-lambdas (quota name)
@@ -44,17 +46,13 @@
   (macrolet ((check-added (names)
 	       `(progn
 		  (get-agent ,names)
-		  ,@(mapcar (lambda (name) `(check (job-present-p ,name the-managers))) names)))
-	     (check-for-error (names should-error)
-	       `(check
-		 (equal ,should-error
-			(errors-p (get-agent ,names))))))
+		  ,@(mapcar (lambda (name) `(check (job-present-p ,name the-managers))) names))))
     (check-added (test))
     (check-added ())
     (check-added (name2 name))
-    (check-for-error (name name) t)
-    (check-for-error (name name2) nil)
-    (check-for-error (name name2) nil)))
+    (check (errors-p (get-agent (name name))))
+    (check (not (errors-p (get-agent (name name2)))))
+    (check (not (errors-p (get-agent (name name2)))))))
 
 (deftest test-remove-job ()
   (macrolet ((check-removed (remove names)
