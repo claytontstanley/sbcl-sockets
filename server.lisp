@@ -39,10 +39,10 @@
   `(* ,g!x ,g!x))
 
 (defmacro errors-p (&body body)
-  "attempts to evaluate body; returns t/nil if eval threw and exception or not"
+  "attempts to evaluate body; returns error/nil if eval threw and exception or not"
   `(attempt
     (progn ,@body nil)
-    :on-error t))
+    :on-error condition))
 
 (defmacro with-gensyms ((&rest names) &body body)
   "paul graham's with-gensyms"
@@ -219,16 +219,15 @@
      :quota (updates/second->quota 1) ;have this plambda fire ~ once every second
      :Fn (plambda () ((host ,host) 
 		      (port ,port))
-	   (block try
-	     (let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp)))	 
-	       (attempt (sb-bsd-sockets::socket-connect sock (sb-bsd-sockets::make-inet-address ,host) ,port)
-			:on-error (progn
-				    (format t "~a~%" condition) 
-				    (sb-bsd-sockets:socket-close sock)
-				    (return-from try (values nil nil))))
-	       (format t "connecting ~a:~a~%" host port)
-	       (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
-		 (values stream sock)))))))
+	   (let ((sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp)))
+	     (acond ((errors-p (sb-bsd-sockets::socket-connect sock (sb-bsd-sockets::make-inet-address ,host) ,port))
+		     (format t "~a~%" it)
+		     (sb-bsd-sockets:socket-close sock)
+		     (values nil nil))
+		    (t
+		     (format t "connecting ~a:~a~%" host port)
+		     (let ((stream (sb-bsd-sockets::socket-make-stream sock :input t :output t :buffering :none)))
+		       (values stream sock))))))))
 
 #+:ccl
 (defmacro uni-client-socket (host port)
@@ -254,16 +253,15 @@
   "opens an active socket on host:port; server-side function
    returns a pandoric function that, when called
    attempts to open and then return a stream and socket for communicating over the connection"
-  `(let ((sock)
-	 (host ,host)
-	 (port ,port)
-	 (,g!init-sock))
-     (setf ,g!init-sock (lambda ()
+  `(let* ((sock)
+	  (host ,host)
+	  (port ,port)
+	  (,g!init-sock (lambda ()
 			  (setf sock (make-instance 'sb-bsd-sockets::inet-socket :type :stream :protocol :tcp :buffering :none))
 			  (setf (sb-bsd-sockets:non-blocking-mode sock) t)
 			  (sb-bsd-sockets::socket-bind sock (sb-bsd-sockets::make-inet-address host) port)
 			  (sb-bsd-sockets::socket-listen sock 5)
-			  nil))
+			  nil)))
      (funcall ,g!init-sock)
      (define-job :name ,(symb `accept- host `- port) 
        :quota (updates/second->quota 1) ;have this plambda fire ~ once every second
