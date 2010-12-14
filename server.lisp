@@ -100,6 +100,7 @@
   "executes body in 'time' seconds; time is intended to be longer than it should take to execute body"
   `(let ((,g!time-to-sleep))
      (setf ,g!time-to-sleep (- ,time (return-time ,@body)))
+     (headroom ,g!time-to-sleep)
      (if (< ,g!time-to-sleep 0)
 	 (format t "lagging behind by ~a seconds~%" (coerce (abs ,g!time-to-sleep) 'double-float))
 	 (sleep ,g!time-to-sleep))))
@@ -194,7 +195,6 @@
 ;////////////////////////////////////////////////////////////
 ;stuff to make sending/receiving/connecting across sockets easier
 ;borrowed heavily from uni-files.lisp in the actr6 distribution
-#+:sbcl (require 'sb-bsd-sockets)
 
 (defmacro uni-stream-active-p (stream)
   `(aif ,stream (open-stream-p it)))
@@ -611,7 +611,9 @@
     `(progn
        (dolist (,g!agent (get-pandoric 'agents 'agents))
 	 (funcall ,disconnect ,g!agent))
-       (sb-ext:save-lisp-and-die "saved.core" :toplevel 'run :purify t))))
+       (let ((pid (sb-posix:fork)))
+	 (when (zerop pid)
+	   (sb-ext:save-lisp-and-die "saved.core" :toplevel 'run :purify t))))))
 
 (defun run ()
   "update-agents keeps getting called until there are no agents left to update
@@ -631,6 +633,10 @@
 #+:sbcl
 (define-symbol-macro save
     (save-agents))
+
+#+:sbcl
+(define-symbol-macro save-and-kill
+    (progn save kill))
 
 (defmacro add-event (&key (trigger-channel) (Fn))
   "adds an event Fn to the trigger-channel"
