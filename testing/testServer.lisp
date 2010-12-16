@@ -295,10 +295,20 @@
     (check (errors-p (check-parse-float "192." 192.0)))
     (check (errors-p (check-parse-float "192.a" 192.0)))
     (check (errors-p (check-parse-float "19a.2" 192.0)))))
-	       
-    
-		 
-	      
+
+(deftest test-nil! ()
+  (macrolet ((check-nils (&rest vars)
+	       `(progn
+		  ,@(mapcar (lambda (var) `(check (null ,var))) vars))))
+    (let ((z) (b) (c))
+      (setf z 5 b 4 c 3)
+      (nil! z b c)
+      (check-nils z b c)
+      (setf z 3)
+      (nil! z)
+      (check-nils z)
+      (check (not (errors-p (nil!)))))))
+      
 (defun test-server ()
   (let ((result
 	 (runtests 
@@ -319,5 +329,6 @@
 	  (test-trim-data)
 	  (test-linear-regression)
 	  (test-parse-float)
+	  (test-nil!)
 	  )))
     (format t "~%overall: ~:[FAIL~;pass~]~%" result)))

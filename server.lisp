@@ -25,6 +25,10 @@
   "squares something"
   `(* ,g!x ,g!x))
 
+(defmacro nil! (&rest vars)
+  "sets every symbol in the list 'vars' to nil"
+  `(progn ,@(mapcar (lambda (var) `(setf ,var nil)) vars)))
+
 (defmacro errors-p (&body body)
   "attempts to evaluate body; returns error/nil if eval threw and exception or not"
   `(attempt
@@ -387,8 +391,7 @@
 		 (multiple-value-setq (bsd-stream bsd-socket) (funcall uni-socket-Fn)))
 	     ;if there is a socket connection, then make sure the connection is still active; if it's not, then throw out the socket
 	     (when (and bsd-stream bsd-socket (funcall uni-broken-pipe-p-Fn bsd-stream))
-	       (setf bsd-stream nil)
-	       (setf bsd-socket nil))
+	       (nil! bsd-stream bsd-socket))
 	     ;make sure that all output on the bsd-stream has reached its destination via the bsd-socket
 	     (uni-without-interrupts 
 	      (finish-output bsd-stream))
@@ -406,8 +409,7 @@
 			(if (equal ',type 'client)
 			    (uni-send-string bsd-stream "[QUIT]"))
 			(uni-close bsd-stream bsd-socket)
-			(setf bsd-stream nil)
-			(setf bsd-socket nil))
+			(nil! bsd-stream bsd-socket))
 		       ;run any extra code to process the received line
 		       (t
 			,@process-line))))))))
@@ -572,8 +574,7 @@
 	     (uni-send-string bsd-stream "[QUIT]")
 	     (cond ((equal type 'client)
 		    (uni-close bsd-stream bsd-socket)
-		    (setf bsd-stream nil)
-		    (setf bsd-socket nil))
+		    (nil! bsd-stream bsd-socket))
 		   ((equal type 'server)
 		    (while (uni-stream-active-p bsd-stream)
 		      (with-time *seconds-per-update*
@@ -608,12 +609,12 @@
   
   #+:sbcl
   (defmacro! save-agents ()
-    `(progn
-       (dolist (,g!agent (get-pandoric 'agents 'agents))
-	 (funcall ,disconnect ,g!agent))
-       (let ((pid (sb-posix:fork)))
-	 (when (zerop pid)
-	   (sb-ext:save-lisp-and-die "saved.core" :toplevel 'run :purify t))))))
+    `(let ((pid (sb-posix:fork)))
+       (when (zerop pid)
+	 (dolist (,g!agent (get-pandoric 'agents 'agents))
+	   (with-pandoric (bsd-socket bsd-stream) (get-pandoric ,g!agent 'socket)
+	     (nil! bsd-stream bsd-socket)))
+	 (sb-ext:save-lisp-and-die "saved.core" :toplevel 'run :purify t)))))
 
 (defun run ()
   "update-agents keeps getting called until there are no agents left to update
