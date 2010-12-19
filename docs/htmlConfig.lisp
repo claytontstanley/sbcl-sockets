@@ -37,6 +37,6 @@
 
 (defun generate-docs ()
     (cldoc:extract-documentation 'cldoc:html "html"
-     '("server.lisp" "uni-files.lisp")
+     '("server.lisp")
      :table-of-contents-title
      "Common Lisp Universal Documentation Generator"))
